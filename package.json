@@ -1,0 +1,122 @@
+{
+  "name": "codereview",
+  "displayName": "Code Review Gate",
+  "description": "Distrust-driven code review: per-line coverage gate plus file-level and cross-file AI analysis, powered by the GitHub CLI and VS Code's Copilot models.",
+  "version": "0.0.1",
+  "publisher": "codereview-dev",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other",
+    "SCM Providers"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "codereview",
+          "title": "Code Review",
+          "icon": "media/codereview.svg"
+        }
+      ]
+    },
+    "views": {
+      "codereview": [
+        {
+          "id": "codereview.changedFiles",
+          "name": "Review Files"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "codereview.changedFiles",
+        "contents": "尚未选择审查范围。\n[选择要审查的源码](command:codereview.startReview)\n\n可选：直接挑选文件/文件夹、PR、分支对比、未提交的改动。审查对象始终是源码本身。"
+      }
+    ],
+    "commands": [
+      {
+        "command": "codereview.startReview",
+        "title": "Code Review: Start Review",
+        "icon": "$(play)"
+      },
+      {
+        "command": "codereview.pickModel",
+        "title": "Code Review: Select Analysis Model",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "codereview.openFile",
+        "title": "Code Review: Open Changed File"
+      },
+      {
+        "command": "codereview.analyzeFile",
+        "title": "Code Review: Analyze Current File",
+        "icon": "$(search-fuzzy)"
+      },
+      {
+        "command": "codereview.globalAnalysis",
+        "title": "Code Review: Run Global Analysis",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "codereview.showGlobalReport",
+        "title": "Code Review: Show Global Report",
+        "icon": "$(output)"
+      },
+      {
+        "command": "codereview.submitConclusion",
+        "title": "Code Review: Submit Conclusion",
+        "icon": "$(check-all)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "codereview.startReview",
+          "when": "view == codereview.changedFiles",
+          "group": "navigation@1"
+        },
+        {
+          "command": "codereview.pickModel",
+          "when": "view == codereview.changedFiles",
+          "group": "navigation@2"
+        },
+        {
+          "command": "codereview.globalAnalysis",
+          "when": "view == codereview.changedFiles",
+          "group": "navigation@3"
+        },
+        {
+          "command": "codereview.submitConclusion",
+          "when": "view == codereview.changedFiles",
+          "group": "navigation@4"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "codereview.analyzeFile",
+          "when": "editorTextFocus",
+          "group": "navigation@9"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "package": "node esbuild.js --production",
+    "check-types": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.96.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
+  }
+}
