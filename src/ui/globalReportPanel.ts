@@ -5,6 +5,7 @@ import type {
   FindingSeverity,
   VerdictKind,
 } from '../ai/types';
+import { transientInfo } from './toast';
 
 const SEVERITY_LABEL: Record<FindingSeverity, string> = {
   bug: '真 Bug',
@@ -80,7 +81,7 @@ export class GlobalReportPanel {
           });
         } else if (msg.type === 'confirm') {
           this.onConfirm();
-          void vscode.window.showInformationMessage('已确认阅读全局结论。');
+          transientInfo('已确认阅读全局结论');
         } else if (msg.type === 'gotoFiles') {
           this.onGotoFiles?.();
         }

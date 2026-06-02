@@ -7,6 +7,7 @@ import {
   WorkingTreeScope,
 } from './scopes';
 import type { ReviewScope } from './types';
+import { transientWarning } from '../ui/toast';
 
 /** Lets the user choose how the set of source files under review is scoped. */
 export async function pickScope(cwd: string): Promise<ReviewScope | undefined> {
@@ -58,7 +59,7 @@ export async function pickScope(cwd: string): Promise<ReviewScope | undefined> {
     }
     const relPaths = await expandToRelPaths(picked, cwd);
     if (relPaths.length === 0) {
-      void vscode.window.showWarningMessage('Code Review：所选范围内没有可审查的文件。');
+      transientWarning('所选范围内没有可审查的文件');
       return undefined;
     }
     return new FileSystemScope(relPaths);

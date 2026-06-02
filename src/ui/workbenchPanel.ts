@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import type { FindingSeverity } from '../ai/types';
 
+export type FindingDispositionKind = 'fixed' | 'commented' | 'ignored';
+
 /** A file row in the workbench sidebar. */
 export interface WorkbenchFile {
   path: string;
@@ -25,7 +27,8 @@ export interface WorkbenchFinding {
   title: string;
   detail: string;
   suggestion?: string;
-  confirmed: boolean;
+  disposition?: FindingDispositionKind;
+  dispositionReason?: string;
 }
 
 /** Serializable snapshot the webview renders. */
@@ -51,7 +54,7 @@ export interface WorkbenchState {
 export interface WorkbenchActions {
   open(path: string): void;
   analyze(path: string): void;
-  confirmFinding(path: string, id: string): void;
+  disposeFinding(path: string, id: string, kind: FindingDispositionKind): void;
   locate(path: string, line: number): void;
   jumpNext(): void;
   globalAnalysis(): void;
@@ -63,13 +66,14 @@ export interface WorkbenchActions {
 type InboundMessage =
   | { type: 'select'; path: string }
   | { type: 'analyze'; path: string }
-  | { type: 'confirm'; path: string; id: string }
+  | { type: 'dispose'; path: string; id: string; kind: FindingDispositionKind }
   | { type: 'locate'; path: string; line: number }
   | { type: 'jumpNext' }
   | { type: 'global' }
   | { type: 'showGlobal' }
   | { type: 'submit' }
-  | { type: 'pickModel' };
+  | { type: 'pickModel' }
+  | { type: 'toggleFolder'; path: string };
 
 /**
  * The Review Workbench: a full webview panel that renders the prototype-style
@@ -80,6 +84,8 @@ export class WorkbenchPanel {
   private static current?: WorkbenchPanel;
   private readonly panel: vscode.WebviewPanel;
   private readonly disposables: vscode.Disposable[] = [];
+  private readonly expandedFolders = new Set<string>();
+  private folderInit = false;
 
   private constructor(
     panel: vscode.WebviewPanel,
@@ -134,8 +140,8 @@ export class WorkbenchPanel {
       case 'analyze':
         this.actions.analyze(msg.path);
         break;
-      case 'confirm':
-        this.actions.confirmFinding(msg.path, msg.id);
+      case 'dispose':
+        this.actions.disposeFinding(msg.path, msg.id, msg.kind);
         break;
       case 'locate':
         this.actions.locate(msg.path, msg.line);
@@ -155,6 +161,14 @@ export class WorkbenchPanel {
       case 'pickModel':
         this.actions.pickModel();
         break;
+      case 'toggleFolder':
+        if (this.expandedFolders.has(msg.path)) {
+          this.expandedFolders.delete(msg.path);
+        } else {
+          this.expandedFolders.add(msg.path);
+        }
+        this.refresh();
+        break;
     }
   }
 
@@ -166,28 +180,28 @@ export class WorkbenchPanel {
       ? Math.round((state.coverage.seen / state.coverage.total) * 100)
       : 0;
 
-    const tree = state.files
-      .map((f) => {
-        const dotClass = f.fullySeen ? 'done' : f.seen > 0 ? 'partial' : 'none';
-        const chg = f.change ? `<span class="chg ${f.change}">${f.change === 'add' ? '+' : f.change === 'del' ? '−' : '~'}</span>` : '';
-        const fixFlag = f.unconfirmed > 0
-          ? `<span class="fix-flag" title="${f.unconfirmed} 个未确认发现">${f.unconfirmed}</span>`
-          : f.analyzed && f.findings === 0
-            ? '<span class="ok-flag" title="无发现">✓</span>'
-            : '';
-        const cov = f.total > 0 ? `${f.seen}/${f.total}` : '—';
-        const stateIcon = f.ready ? '✓' : f.analyzed ? '◑' : '○';
-        return `
-        <div class="tnode ${f.active ? 'active' : ''} ${f.ready ? 'ready' : ''}" data-path="${escAttr(f.path)}">
-          <span class="seen-dot ${dotClass}"></span>
-          <span class="tstate">${stateIcon}</span>
-          <span class="tname" title="${escAttr(f.path)}">${esc(f.name)}</span>
-          ${chg}
-          ${fixFlag}
-          <span class="tcov">${cov}</span>
-        </div>`;
-      })
-      .join('');
+    const treeRoot = compactTree(buildTree(state.files));
+
+    if (!this.folderInit && (treeRoot.children?.length ?? 0) > 0) {
+      this.folderInit = true;
+      for (const child of treeRoot.children ?? []) {
+        if (child.kind === 'folder') {
+          this.expandedFolders.add(child.fullPath);
+        }
+      }
+    }
+
+    if (state.selected) {
+      let p = state.selected;
+      while (p.includes('/')) {
+        p = p.slice(0, p.lastIndexOf('/'));
+        this.expandedFolders.add(p);
+      }
+    }
+
+    const tree = (treeRoot.children ?? [])
+      .map((c) => this.renderNode(c, 0))
+      .join('') || '<div class="empty">无文件</div>';
 
     const gateReason: string[] = [];
     if (state.coverage.filesReady < state.coverage.filesTotal) {
@@ -233,7 +247,27 @@ export class WorkbenchPanel {
   .sb-head { padding:.7rem .85rem .55rem; border-bottom:1px solid var(--line); }
   .sb-title { font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); }
   .sb-label { font-weight:700; margin-top:.15rem; }
-  .tree { flex:1; overflow:auto; padding:.35rem; min-height:0; }
+
+  .filter-row { padding:.4rem .55rem; border-bottom:1px solid var(--line); }
+  .filter-row input { width:100%; box-sizing:border-box; font-family:inherit; font-size:.78rem;
+    padding:.35rem .5rem; border-radius:5px; border:1px solid var(--line);
+    background:var(--vscode-input-background, rgba(127,127,127,.08));
+    color:var(--vscode-input-foreground, inherit); }
+  .filter-row input:focus { outline:1px solid var(--vscode-focusBorder); }
+
+  .tree { flex:1; overflow:auto; padding:.35rem .25rem; min-height:0; }
+  .folder-group.collapsed > .children { display:none; }
+  .folder-group.collapsed > .tfolder .caret { transform:rotate(0deg); }
+  .tfolder { display:flex; align-items:center; gap:.4rem; padding:.28rem .45rem;
+    cursor:pointer; border-radius:6px; }
+  .tfolder:hover { background:var(--vscode-list-hoverBackground); }
+  .tfolder .caret { display:inline-block; width:11px; text-align:center;
+    transition:transform .15s ease; transform:rotate(90deg); color:var(--dim); flex-shrink:0; }
+  .tfolder .ficon { flex-shrink:0; opacity:.85; }
+  .tfolder .tname { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; }
+  .tfolder .tcount { font-family:var(--vscode-editor-font-family); font-size:.68rem;
+    color:var(--dim); flex-shrink:0; }
+
   .tnode { display:flex; align-items:center; gap:.45rem; padding:.32rem .45rem; border-radius:6px; cursor:pointer; }
   .tnode:hover { background:var(--vscode-list-hoverBackground); }
   .tnode.active { background:var(--purple-bg); box-shadow:inset 2px 0 0 var(--purple); }
@@ -291,6 +325,9 @@ export class WorkbenchPanel {
         <div class="sb-title">审查范围</div>
         <div class="sb-label">${esc(state.label)}</div>
       </div>
+      <div class="filter-row">
+        <input id="filter" type="search" placeholder="过滤文件路径…" autocomplete="off" />
+      </div>
       <div class="tree">${tree || '<div class="empty">无文件</div>'}</div>
       <div class="toolbar">
         <div class="grp-label">当前文件</div>
@@ -331,6 +368,47 @@ export class WorkbenchPanel {
   document.querySelectorAll('.tnode').forEach((n) => {
     n.addEventListener('click', () => send({ type:'select', path:n.dataset.path }));
   });
+  document.querySelectorAll('.tfolder').forEach((f) => {
+    f.addEventListener('click', () => {
+      const group = f.parentElement;
+      if (!group) return;
+      const wasCollapsed = group.classList.contains('collapsed');
+      group.classList.toggle('collapsed');
+      group.dataset.serverCollapsed = wasCollapsed ? 'false' : 'true';
+      send({ type:'toggleFolder', path:group.dataset.path });
+    });
+  });
+  const filterInput = document.getElementById('filter');
+  function applyFilter() {
+    const q = filterInput.value.trim().toLowerCase();
+    const ancestors = new Set();
+    document.querySelectorAll('.tnode').forEach((r) => {
+      const path = (r.dataset.path || '').toLowerCase();
+      const m = q === '' || path.includes(q);
+      r.style.display = m ? '' : 'none';
+      if (m && q !== '') {
+        let p = r.dataset.path || '';
+        while (p.includes('/')) {
+          p = p.slice(0, p.lastIndexOf('/'));
+          ancestors.add(p);
+        }
+      }
+    });
+    document.querySelectorAll('.folder-group').forEach((g) => {
+      const path = g.dataset.path;
+      if (q === '') {
+        g.style.display = '';
+        if (g.dataset.serverCollapsed === 'true') g.classList.add('collapsed');
+        else g.classList.remove('collapsed');
+      } else if (ancestors.has(path)) {
+        g.style.display = '';
+        g.classList.remove('collapsed');
+      } else {
+        g.style.display = 'none';
+      }
+    });
+  }
+  filterInput.addEventListener('input', applyFilter);
   const sel = ${JSON.stringify(state.selected ?? null)};
   const byId = (id) => document.getElementById(id);
   byId('analyze')?.addEventListener('click', () => sel && send({ type:'analyze', path:sel }));
@@ -345,6 +423,8 @@ export class WorkbenchPanel {
   document.querySelectorAll('.confirm-btn').forEach((b) => {
     b.addEventListener('click', () => send({ type:'confirm', path:b.dataset.path, id:b.dataset.id }));
   });
+  const active = document.querySelector('.tnode.active');
+  if (active) active.scrollIntoView({ block: 'nearest' });
 </script>
 </body>
 </html>`;
@@ -357,6 +437,147 @@ export class WorkbenchPanel {
       d.dispose();
     }
   }
+
+  private renderNode(node: TreeNode, depth: number): string {
+    const indent = depth * 12 + 8;
+    if (node.kind === 'file' && node.file) {
+      const f = node.file;
+      const dotClass = f.fullySeen ? 'done' : f.seen > 0 ? 'partial' : 'none';
+      const chg = f.change
+        ? `<span class="chg ${f.change}">${f.change === 'add' ? '+' : f.change === 'del' ? '−' : '~'}</span>`
+        : '';
+      const fixFlag = f.unconfirmed > 0
+        ? `<span class="fix-flag" title="${f.unconfirmed} 个未确认发现">${f.unconfirmed}</span>`
+        : f.analyzed && f.findings === 0
+          ? '<span class="ok-flag" title="无发现">✓</span>'
+          : '';
+      const cov = f.total > 0 ? `${f.seen}/${f.total}` : '—';
+      const stateIcon = f.ready ? '✓' : f.analyzed ? '◑' : '○';
+      return `<div class="tnode ${f.active ? 'active' : ''} ${f.ready ? 'ready' : ''}" data-path="${escAttr(f.path)}" style="padding-left:${indent}px">
+        <span class="seen-dot ${dotClass}"></span>
+        <span class="tstate">${stateIcon}</span>
+        <span class="tname" title="${escAttr(f.path)}">${esc(f.name)}</span>
+        ${chg}
+        ${fixFlag}
+        <span class="tcov">${cov}</span>
+      </div>`;
+    }
+    const isExpanded = this.expandedFolders.has(node.fullPath);
+    const stats = node.stats ?? { seen: 0, total: 0, ready: 0, filesTotal: 0, findings: 0, unconfirmed: 0 };
+    const folderDot = stats.filesTotal > 0 && stats.ready === stats.filesTotal
+      ? 'done'
+      : stats.ready > 0 || stats.seen > 0
+        ? 'partial'
+        : 'none';
+    const childrenHtml = (node.children ?? []).map((c) => this.renderNode(c, depth + 1)).join('');
+    return `<div class="folder-group ${isExpanded ? '' : 'collapsed'}" data-path="${escAttr(node.fullPath)}" data-server-collapsed="${isExpanded ? 'false' : 'true'}">
+      <div class="tfolder" style="padding-left:${indent}px">
+        <span class="caret">▸</span>
+        <span class="seen-dot ${folderDot}"></span>
+        <span class="ficon">📁</span>
+        <span class="tname" title="${escAttr(node.fullPath)}">${esc(node.name)}</span>
+        <span class="tcount">${stats.ready}/${stats.filesTotal}</span>
+      </div>
+      <div class="children">${childrenHtml}</div>
+    </div>`;
+  }
+}
+
+interface FolderStats {
+  seen: number;
+  total: number;
+  ready: number;
+  filesTotal: number;
+  findings: number;
+  unconfirmed: number;
+}
+
+interface TreeNode {
+  kind: 'folder' | 'file';
+  name: string;
+  fullPath: string;
+  children?: TreeNode[];
+  file?: WorkbenchFile;
+  stats?: FolderStats;
+}
+
+function buildTree(files: WorkbenchFile[]): TreeNode {
+  const root: TreeNode = { kind: 'folder', name: '', fullPath: '', children: [] };
+  for (const f of files) {
+    const segments = f.path.split('/');
+    let node: TreeNode = root;
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      const isLast = i === segments.length - 1;
+      const segPath = segments.slice(0, i + 1).join('/');
+      const wantKind: TreeNode['kind'] = isLast ? 'file' : 'folder';
+      let child = node.children?.find((c) => c.name === seg && c.kind === wantKind);
+      if (!child) {
+        child = isLast
+          ? { kind: 'file', name: seg, fullPath: segPath, file: f }
+          : { kind: 'folder', name: seg, fullPath: segPath, children: [] };
+        node.children!.push(child);
+      }
+      node = child;
+    }
+  }
+  sortTree(root);
+  computeStats(root);
+  return root;
+}
+
+function sortTree(node: TreeNode): void {
+  if (!node.children) return;
+  node.children.sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === 'folder' ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  node.children.forEach(sortTree);
+}
+
+function computeStats(node: TreeNode): FolderStats {
+  if (node.kind === 'file' && node.file) {
+    return {
+      seen: node.file.seen,
+      total: node.file.total,
+      ready: node.file.ready ? 1 : 0,
+      filesTotal: 1,
+      findings: node.file.findings,
+      unconfirmed: node.file.unconfirmed,
+    };
+  }
+  const acc: FolderStats = { seen: 0, total: 0, ready: 0, filesTotal: 0, findings: 0, unconfirmed: 0 };
+  for (const child of node.children ?? []) {
+    const s = computeStats(child);
+    acc.seen += s.seen;
+    acc.total += s.total;
+    acc.ready += s.ready;
+    acc.filesTotal += s.filesTotal;
+    acc.findings += s.findings;
+    acc.unconfirmed += s.unconfirmed;
+  }
+  node.stats = acc;
+  return acc;
+}
+
+function compactTree(node: TreeNode): TreeNode {
+  if (node.kind === 'file') return node;
+  const compactedChildren = (node.children ?? []).map(compactTree);
+  if (
+    node.fullPath !== '' &&
+    compactedChildren.length === 1 &&
+    compactedChildren[0].kind === 'folder'
+  ) {
+    const child = compactedChildren[0];
+    return {
+      kind: 'folder',
+      name: `${node.name}/${child.name}`,
+      fullPath: child.fullPath,
+      children: child.children,
+      stats: child.stats,
+    };
+  }
+  return { ...node, children: compactedChildren };
 }
 
 function esc(s: string): string {

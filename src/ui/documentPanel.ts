@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 
+export type DocFindingDisposition = 'fixed' | 'commented' | 'ignored';
+
 /** A finding shown inline against a source line. */
 export interface DocFinding {
   id: string;
@@ -8,7 +10,8 @@ export interface DocFinding {
   title: string;
   detail: string;
   suggestion?: string;
-  confirmed: boolean;
+  disposition?: DocFindingDisposition;
+  dispositionReason?: string;
 }
 
 /** A persisted annotation (translation, explanation, or note) anchored to a file. */
@@ -43,7 +46,7 @@ export interface DocActions {
   explain(path: string, startLine: number, endLine: number, text: string): void;
   note(path: string, startLine: number, endLine: number, text: string): void;
   removeAnnotation(path: string, id: string): void;
-  confirmFinding(path: string, id: string): void;
+  disposeFinding(path: string, id: string, kind: DocFindingDisposition): void;
   locate(path: string, line: number): void;
   analyze(path: string): void;
   jumpNext(path: string): void;
@@ -56,7 +59,7 @@ type Inbound =
   | { type: 'explain'; startLine: number; endLine: number; text: string }
   | { type: 'note'; startLine: number; endLine: number; text: string }
   | { type: 'removeAnnotation'; id: string }
-  | { type: 'confirm'; id: string }
+  | { type: 'dispose'; id: string; kind: DocFindingDisposition }
   | { type: 'locate'; line: number }
   | { type: 'analyze' }
   | { type: 'jumpNext' };
@@ -160,8 +163,8 @@ export class DocumentPanel {
       case 'removeAnnotation':
         this.actions.removeAnnotation(path, m.id);
         break;
-      case 'confirm':
-        this.actions.confirmFinding(path, m.id);
+      case 'dispose':
+        this.actions.disposeFinding(path, m.id, m.kind);
         break;
       case 'locate':
         this.actions.locate(path, m.line);
@@ -394,10 +397,11 @@ function decodeEntities(s) {
 }
 
 const SEV_LABEL = { bug:'真 Bug', conditional:'条件性', suggestion:'建议' };
+const DISP_LABEL = { fixed:'已 Copilot 修复', commented:'已写为评论', ignored:'已忽略' };
 
 function findingCard(f) {
   const div = document.createElement('div');
-  div.className = 'finding ' + f.severity + (f.confirmed ? ' confirmed' : '');
+  div.className = 'finding ' + f.severity + (f.disposition ? ' disposed' : '');
   const head = document.createElement('div');
   head.className = 'f-head';
   head.innerHTML =
@@ -417,18 +421,33 @@ function findingCard(f) {
     sug.textContent = '建议：' + f.suggestion;
     body.appendChild(sug);
   }
+  if (f.disposition) {
+    const tag = document.createElement('div');
+    tag.className = 'disp-badge disp-' + f.disposition;
+    var label = DISP_LABEL[f.disposition] || f.disposition;
+    tag.textContent = '✓ ' + label + (f.dispositionReason ? '：' + f.dispositionReason : '');
+    body.appendChild(tag);
+  }
   const actions = document.createElement('div');
   actions.className = 'f-actions';
   const locate = document.createElement('button');
   locate.textContent = '定位';
   locate.addEventListener('click', () => vscode.postMessage({ type:'locate', line:f.line }));
   actions.appendChild(locate);
-  const confirm = document.createElement('button');
-  confirm.textContent = f.confirmed ? '撤销确认' : '确认已读';
-  if (!f.confirmed) confirm.className = 'primary';
-  confirm.addEventListener('click', () => vscode.postMessage({ type:'confirm', id:f.id }));
-  if (f.confirmed) { const tag = document.createElement('span'); tag.className='done'; tag.textContent='✓ 已确认'; actions.appendChild(tag); }
-  actions.appendChild(confirm);
+
+  function disposeBtn(kind, label, primary) {
+    const b = document.createElement('button');
+    b.textContent = (f.disposition === kind ? '撤销 ' : '') + label;
+    if (primary && f.disposition !== kind) b.className = 'primary';
+    b.addEventListener('click', () => vscode.postMessage({ type:'dispose', id:f.id, kind:kind }));
+    return b;
+  }
+  // primary action depends on what's already been done
+  const noDisp = !f.disposition;
+  actions.appendChild(disposeBtn('fixed', '🪄 Copilot 修复', noDisp));
+  actions.appendChild(disposeBtn('commented', '💬 写为评论', false));
+  actions.appendChild(disposeBtn('ignored', '🚫 忽略', false));
+
   body.appendChild(actions);
   div.appendChild(head);
   div.appendChild(body);

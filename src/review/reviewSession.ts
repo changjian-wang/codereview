@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'node:path';
 import type { ReviewSet } from '../scope/types';
 import type { Finding, GlobalReport } from '../ai/types';
-import type { PerFileState, ReviewKey, ReviewSnapshot, ReviewStore, Annotation, ReviewConclusion } from './reviewStore';
+import type { PerFileState, ReviewKey, ReviewSnapshot, ReviewStore, Annotation, ReviewConclusion, FindingDisposition } from './reviewStore';
 
 /**
  * Holds the in-memory state of the active review and persists it through a
@@ -61,6 +61,18 @@ export class ReviewSession {
       }
       if (s && !Array.isArray(s.annotations)) {
         s.annotations = [];
+      }
+      if (s && !s.dispositions) {
+        s.dispositions = {};
+      }
+      // Migrate legacy "confirmed read" marks to the new commented disposition.
+      if (s?.confirmedFindings?.length) {
+        for (const id of s.confirmedFindings) {
+          if (!s.dispositions![id]) {
+            s.dispositions![id] = { kind: 'commented', at: Date.now() };
+          }
+        }
+        s.confirmedFindings = [];
       }
     }
     this._onDidChange.fire();
@@ -130,15 +142,14 @@ export class ReviewSession {
     return true;
   }
 
-  /** A file is "ready" when fully seen, analyzed, with no unconfirmed findings. */
+  /** A file is "ready" when it has been analyzed and every finding has a disposition. */
   fileReady(path: string): boolean {
     const s = this.fileState(path);
-    if (!s) {
+    if (!s || !s.analyzed) {
       return false;
     }
-    const fullySeen = s.totalLines > 0 && s.seenLines.length >= s.totalLines;
-    const allConfirmed = s.findings.every((f) => s.confirmedFindings.includes(f.id));
-    return fullySeen && s.analyzed && allConfirmed;
+    const dispositions = s.dispositions ?? {};
+    return s.findings.every((f) => !!dispositions[f.id]);
   }
 
   /** Whether every line of the file has been seen (coverage complete). */
@@ -155,9 +166,16 @@ export class ReviewSession {
     }
     s.findings = findings;
     s.analyzed = true;
-    // Drop confirmations that no longer correspond to a current finding.
+    // Drop dispositions whose finding no longer exists in the latest analysis.
     const ids = new Set(findings.map((f) => f.id));
-    s.confirmedFindings = s.confirmedFindings.filter((id) => ids.has(id));
+    if (s.dispositions) {
+      for (const id of Object.keys(s.dispositions)) {
+        if (!ids.has(id)) {
+          delete s.dispositions[id];
+        }
+      }
+    }
+    s.confirmedFindings = [];
     void this.persist();
   }
 
@@ -165,37 +183,38 @@ export class ReviewSession {
     return this.fileState(path)?.findings ?? [];
   }
 
-  /** Whether a specific finding has been confirmed read by the reviewer. */
-  isFindingConfirmed(path: string, findingId: string): boolean {
-    return !!this.fileState(path)?.confirmedFindings.includes(findingId);
+  /** Disposition of a single finding, if the reviewer has acted on it. */
+  findingDisposition(path: string, findingId: string): FindingDisposition | undefined {
+    return this.fileState(path)?.dispositions?.[findingId];
   }
 
-  /** Toggles confirmation of a single finding; returns the new state. */
-  toggleFindingConfirmed(path: string, findingId: string): boolean {
+  /** Records the reviewer's disposition for a finding. Returns true if changed. */
+  setFindingDisposition(path: string, findingId: string, disposition: FindingDisposition | null): boolean {
     const s = this.fileState(path);
     if (!s) {
       return false;
     }
-    const idx = s.confirmedFindings.indexOf(findingId);
-    let confirmed: boolean;
-    if (idx >= 0) {
-      s.confirmedFindings.splice(idx, 1);
-      confirmed = false;
+    s.dispositions ??= {};
+    if (disposition === null) {
+      if (!(findingId in s.dispositions)) {
+        return false;
+      }
+      delete s.dispositions[findingId];
     } else {
-      s.confirmedFindings.push(findingId);
-      confirmed = true;
+      s.dispositions[findingId] = { ...disposition, at: disposition.at || Date.now() };
     }
     void this.persist();
-    return confirmed;
+    return true;
   }
 
-  /** Count of unconfirmed findings for a file. */
+  /** Count of findings that still have no disposition. */
   unconfirmedCount(path: string): number {
     const s = this.fileState(path);
     if (!s) {
       return 0;
     }
-    return s.findings.filter((f) => !s.confirmedFindings.includes(f.id)).length;
+    const dispositions = s.dispositions ?? {};
+    return s.findings.filter((f) => !dispositions[f.id]).length;
   }
 
   /** Reviewer translations / notes attached to a file. */

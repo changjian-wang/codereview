@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import { ReviewSession } from './review/reviewSession';
 import { WorkspaceStateReviewStore, type Annotation } from './review/reviewStore';
 import { pickModel } from './ai/modelPicker';
@@ -13,12 +15,13 @@ import {
   type GlobalContextFile,
 } from './ai/analyzer';
 import { pickScope } from './scope/scopePicker';
-import { submitPrReview } from './gh/ghClient';
+import { submitPrReview, postPrLineComment } from './gh/ghClient';
 import { GlobalReportPanel } from './ui/globalReportPanel';
 import { runWithProgress } from './ui/progressSteps';
-import { WorkbenchPanel, type WorkbenchState, type WorkbenchFile } from './ui/workbenchPanel';
+import { WorkbenchPanel, type WorkbenchState, type WorkbenchFile, type FindingDispositionKind } from './ui/workbenchPanel';
 import { DocumentPanel, type DocModel } from './ui/documentPanel';
 import { renderDocument, type DocumentRender } from './ui/documentRenderer';
+import { transientInfo, transientWarning } from './ui/toast';
 
 let session: ReviewSession;
 const models = new ModelProvider();
@@ -81,10 +84,8 @@ async function startReview(): Promise<void> {
         workbenchSelected = undefined;
         docRenderCache.clear();
         void vscode.commands.executeCommand('setContext', 'codereview.active', true);
-        openWorkbench();
-        void vscode.window.showInformationMessage(
-          `Code Review：${reviewSet.label} · ${reviewSet.files.length} 个文件`,
-        );
+        await openWorkbench();
+        transientInfo(`已加载 ${reviewSet.label} · ${reviewSet.files.length} 个文件`);
       } catch (err) {
         const message = String((err as Error)?.message ?? err);
         void vscode.window.showErrorMessage(`Code Review：${message}`);
@@ -98,20 +99,21 @@ async function selectModel(): Promise<void> {
   if (choice) {
     models.set(choice);
     WorkbenchPanel.refreshIfOpen();
-    void vscode.window.showInformationMessage(`Code Review 分析模型：${choice.label}`);
+    transientInfo(`分析模型已切换：${choice.label}`);
   }
 }
 
 /** Opens (or reveals) the Review Workbench webview. */
-function openWorkbench(): void {
+async function openWorkbench(): Promise<void> {
   if (!session.reviewSet) {
-    void vscode.window.showInformationMessage('Code Review：请先开始一次审查（选择范围）。');
+    transientWarning('请先开始一次审查（选择范围）');
     return;
   }
+  const wasOpen = WorkbenchPanel.isOpen;
   WorkbenchPanel.show(buildWorkbenchState, {
     open: (path) => void openFileInPanel(path),
     analyze: (path) => void analyzeByPath(path),
-    confirmFinding: (path, id) => session.toggleFindingConfirmed(path, id),
+    disposeFinding: (path, id, kind) => void disposeFinding(path, id, kind),
     locate: (path, line) => void locateInFile(path, line),
     jumpNext: jumpToNextUnseenCurrent,
     globalAnalysis: () => void runGlobalAnalysis(),
@@ -119,6 +121,32 @@ function openWorkbench(): void {
     submit: () => void submitConclusion(),
     pickModel: () => void selectModel(),
   });
+  if (!workbenchSelected) {
+    const first = [...session.reviewSet.files].sort((a, b) => a.path.localeCompare(b.path))[0];
+    if (first) {
+      await openFileInPanel(first.path);
+    }
+  }
+  if (!wasOpen) {
+    await applyWorkbenchLayout();
+  }
+}
+
+/**
+ * Sets the editor group split ratio so the workbench sidebar (column 1) is
+ * narrow enough to act as a tool window while the document viewer (column 2)
+ * gets the bulk of the width. Only invoked when the workbench is first opened
+ * — subsequent file switches keep whatever ratio the user dragged to.
+ */
+async function applyWorkbenchLayout(): Promise<void> {
+  try {
+    await vscode.commands.executeCommand('vscode.setEditorLayout', {
+      orientation: 0,
+      groups: [{ size: 0.3 }, { size: 0.7 }],
+    });
+  } catch {
+    // Older VS Code versions or missing second group — ignore.
+  }
 }
 
 /** Maps a ReviewFile's diff status to a workbench change badge. */
@@ -168,15 +196,19 @@ function buildWorkbenchState(): WorkbenchState {
   });
 
   const selectedFindings = workbenchSelected
-    ? session.findings(workbenchSelected).map((f) => ({
-        id: f.id,
-        line: f.line,
-        severity: f.severity,
-        title: f.title,
-        detail: f.detail,
-        suggestion: f.suggestion,
-        confirmed: session.isFindingConfirmed(workbenchSelected!, f.id),
-      }))
+    ? session.findings(workbenchSelected).map((f) => {
+        const d = session.findingDisposition(workbenchSelected!, f.id);
+        return {
+          id: f.id,
+          line: f.line,
+          severity: f.severity,
+          title: f.title,
+          detail: f.detail,
+          suggestion: f.suggestion,
+          disposition: d?.kind,
+          dispositionReason: d?.reason,
+        };
+      })
     : [];
 
   return {
@@ -247,15 +279,19 @@ function buildDocModel(relPath: string, render: DocumentRender): DocModel {
     sourceLines: render.sourceLines,
     raw: deHighlight(render.sourceLines),
     seen: state?.seenLines ?? [],
-    findings: session.findings(relPath).map((f) => ({
-      id: f.id,
-      line: f.line,
-      severity: f.severity,
-      title: f.title,
-      detail: f.detail,
-      suggestion: f.suggestion,
-      confirmed: session.isFindingConfirmed(relPath, f.id),
-    })),
+    findings: session.findings(relPath).map((f) => {
+      const d = session.findingDisposition(relPath, f.id);
+      return {
+        id: f.id,
+        line: f.line,
+        severity: f.severity,
+        title: f.title,
+        detail: f.detail,
+        suggestion: f.suggestion,
+        disposition: d?.kind,
+        dispositionReason: d?.reason,
+      };
+    }),
     annotations: session.annotations(relPath).map((a) => ({
       id: a.id,
       kind: a.kind,
@@ -302,9 +338,8 @@ function docActions() {
       session.removeAnnotation(path, id);
       refreshDocPanel(path);
     },
-    confirmFinding: (path: string, id: string) => {
-      session.toggleFindingConfirmed(path, id);
-      refreshDocPanel(path);
+    disposeFinding: (path: string, id: string, kind: FindingDispositionKind) => {
+      void disposeFinding(path, id, kind);
     },
     locate: (path: string, line: number) => void locateInFile(path, line),
     analyze: (path: string) => void analyzeByPath(path),
@@ -439,7 +474,7 @@ async function readReviewFileText(relPath: string): Promise<string> {
 async function analyzeCurrentFile(): Promise<void> {
   const rel = DocumentPanel.currentPath ?? workbenchSelected;
   if (!rel) {
-    void vscode.window.showWarningMessage('Code Review：请先在工作台中选择要分析的文件。');
+    transientWarning('请先在工作台中选择要分析的文件');
     return;
   }
   await analyzeByPath(rel);
@@ -474,10 +509,10 @@ async function analyzeByPath(rel: string): Promise<void> {
       report('写入发现…');
       session.setFindings(rel, findings);
       refreshDocPanel(rel);
-      void vscode.window.showInformationMessage(
+      transientInfo(
         findings.length
-          ? `Code Review：${rel} 发现 ${findings.length} 个问题。`
-          : `Code Review：${rel} 未发现问题。`,
+          ? `${rel} 发现 ${findings.length} 个问题`
+          : `${rel} 未发现问题`,
       );
     } catch (err) {
       reportError(err);
@@ -485,10 +520,153 @@ async function analyzeByPath(rel: string): Promise<void> {
   });
 }
 
+/**
+ * Routes the reviewer's disposition for a finding to the appropriate side effect
+ * (invoke Copilot inline chat, post PR line comment, or capture an ignore reason)
+ * and persists the result so the gate can advance.
+ */
+async function disposeFinding(rel: string, findingId: string, kind: FindingDispositionKind): Promise<void> {
+  const reviewSet = session.reviewSet;
+  if (!reviewSet) {
+    return;
+  }
+  const current = session.findingDisposition(rel, findingId);
+  if (current?.kind === kind) {
+    session.setFindingDisposition(rel, findingId, null);
+    transientInfo(`已撤销 ${rel} 的处置`);
+    WorkbenchPanel.refreshIfOpen();
+    refreshDocPanel(rel);
+    return;
+  }
+  const finding = session.findings(rel).find((f) => f.id === findingId);
+  if (!finding) {
+    return;
+  }
+
+  const cwd = workspaceFolderPath();
+  if (!cwd) {
+    return;
+  }
+
+  if (kind === 'fixed') {
+    await locateInFile(rel, finding.line);
+    const prompt = composeFixPrompt(finding);
+    try {
+      await vscode.commands.executeCommand('inlineChat.start', { message: prompt, autoSend: true });
+    } catch {
+      try {
+        await vscode.env.clipboard.writeText(prompt);
+        transientWarning('未找到 Copilot Inline Chat，已复制提示词到剪贴板');
+      } catch {
+        // ignore clipboard failures
+      }
+    }
+    session.setFindingDisposition(rel, findingId, { kind: 'fixed', at: Date.now() });
+    transientInfo('已标记为「待 Copilot 修复」；接受补丁后保持此标记');
+  } else if (kind === 'commented') {
+    const prMatch = reviewSet.scopeId.match(/^pr-(\d+)$/);
+    const body = composeCommentBody(finding);
+    if (prMatch) {
+      const prNumber = Number(prMatch[1]);
+      try {
+        const result = await postPrLineComment(
+          cwd,
+          prNumber,
+          reviewSet.headSha,
+          rel,
+          finding.line,
+          body,
+        );
+        session.setFindingDisposition(rel, findingId, {
+          kind: 'commented',
+          ref: String(result.id),
+          at: Date.now(),
+        });
+        transientInfo(`已写为 PR #${prNumber} 行评论`);
+      } catch (err) {
+        void vscode.window.showErrorMessage(`Code Review：发送 PR 评论失败 — ${(err as Error).message}`);
+        return;
+      }
+    } else {
+      try {
+        const filePath = await appendLocalFindingNote(cwd, reviewSet.scopeId, rel, finding, body);
+        session.setFindingDisposition(rel, findingId, {
+          kind: 'commented',
+          ref: filePath,
+          at: Date.now(),
+        });
+        transientInfo(`已记入 ${path.relative(cwd, filePath)}`);
+      } catch (err) {
+        void vscode.window.showErrorMessage(`Code Review：写入本地评论失败 — ${(err as Error).message}`);
+        return;
+      }
+    }
+  } else if (kind === 'ignored') {
+    const reason = await vscode.window.showInputBox({
+      title: `Code Review · 忽略：${finding.title}`,
+      prompt: '请输入忽略此发现的理由（会持久化到本地审查记录）',
+      placeHolder: '例：误报 / 当前迭代不处理 / 已在 issue #123 跟进',
+      ignoreFocusOut: true,
+      validateInput: (v) => (v.trim().length >= 4 ? null : '至少 4 个字符'),
+    });
+    if (!reason) {
+      return;
+    }
+    session.setFindingDisposition(rel, findingId, {
+      kind: 'ignored',
+      reason: reason.trim(),
+      at: Date.now(),
+    });
+    transientInfo('已忽略');
+  }
+
+  WorkbenchPanel.refreshIfOpen();
+  refreshDocPanel(rel);
+}
+
+function composeFixPrompt(finding: { title: string; detail: string; suggestion?: string; line: number }): string {
+  const lines: string[] = [
+    `修复以下代码审查问题（第 ${finding.line} 行附近）：`,
+    `标题：${finding.title}`,
+    `问题：${finding.detail}`,
+  ];
+  if (finding.suggestion) {
+    lines.push(`建议：${finding.suggestion}`);
+  }
+  lines.push('请直接给出可应用的最小改动。');
+  return lines.join('\n');
+}
+
+function composeCommentBody(finding: { title: string; detail: string; suggestion?: string }): string {
+  const parts = [`**${finding.title}**`, '', finding.detail];
+  if (finding.suggestion) {
+    parts.push('', `**建议**：${finding.suggestion}`);
+  }
+  parts.push('', '_via Code Review Gate_');
+  return parts.join('\n');
+}
+
+async function appendLocalFindingNote(
+  cwd: string,
+  scopeId: string,
+  rel: string,
+  finding: { line: number; title: string; detail: string; suggestion?: string },
+  body: string,
+): Promise<string> {
+  const dir = path.join(cwd, '.codereview');
+  await fs.mkdir(dir, { recursive: true });
+  const safeScope = scopeId.replace(/[^\w.-]+/g, '_');
+  const target = path.join(dir, `findings-${safeScope}.md`);
+  const stamp = new Date().toISOString();
+  const block = `\n---\n\n## ${rel}:${finding.line}\n\n${body}\n\n<sub>${stamp}</sub>\n`;
+  await fs.appendFile(target, block, 'utf8');
+  return target;
+}
+
 async function runGlobalAnalysis(): Promise<void> {
   const reviewSet = session.reviewSet;
   if (!reviewSet) {
-    void vscode.window.showWarningMessage('Code Review：尚未开始审查。');
+    transientWarning('尚未开始审查');
     return;
   }
   const unready = reviewSet.files.filter((f) => !session.fileFullySeen(f.path));
@@ -532,7 +710,7 @@ async function runGlobalAnalysis(): Promise<void> {
 function showGlobalReport(): void {
   const report = session.globalReport;
   if (!report) {
-    void vscode.window.showInformationMessage('Code Review：尚无全局结论，请先运行全局分析。');
+    transientInfo('尚无全局结论，请先运行全局分析');
     return;
   }
   const cov = session.totalCoverage();
@@ -611,7 +789,7 @@ function jumpToNextUnseen(relPath: string): void {
   }
   const total = state.totalLines;
   if (total <= 0) {
-    void vscode.window.showInformationMessage('Code Review：文件尚未加载完成。');
+    transientInfo('文件尚未加载完成');
     return;
   }
   const seen = new Set(state.seenLines);
@@ -623,7 +801,7 @@ function jumpToNextUnseen(relPath: string): void {
     }
   }
   if (target < 0) {
-    void vscode.window.showInformationMessage('Code Review：本文件已全部通读。');
+    transientInfo('本文件已全部通读');
     return;
   }
   DocumentPanel.scrollTo(target);
@@ -633,7 +811,7 @@ function jumpToNextUnseen(relPath: string): void {
 function jumpToNextUnseenCurrent(): void {
   const rel = DocumentPanel.currentPath ?? workbenchSelected;
   if (!rel) {
-    void vscode.window.showInformationMessage('Code Review：请先在工作台中选择一个文件。');
+    transientWarning('请先在工作台中选择一个文件');
     return;
   }
   jumpToNextUnseen(rel);
@@ -641,7 +819,7 @@ function jumpToNextUnseenCurrent(): void {
 
 async function submitConclusion(): Promise<void> {
   if (!session.reviewSet) {
-    void vscode.window.showWarningMessage('Code Review：尚未开始审查。');
+    transientWarning('尚未开始审查');
     return;
   }
   if (!session.gatePassed()) {
@@ -698,7 +876,7 @@ async function submitConclusion(): Promise<void> {
         prNumber,
         submittedAt: Date.now(),
       });
-      void vscode.window.showInformationMessage(`Code Review：已写回 PR #${prNumber}（${cleanLabel}）。`);
+      transientInfo(`已写回 PR #${prNumber}（${cleanLabel}）`);
     } catch (err) {
       reportError(err);
     }
@@ -711,7 +889,7 @@ async function submitConclusion(): Promise<void> {
     target: 'local',
     submittedAt: Date.now(),
   });
-  void vscode.window.showInformationMessage(`Code Review 结论已记录：${cleanLabel}`);
+  transientInfo(`审查结论已记录：${cleanLabel}`);
 }
 
 function reportError(err: unknown): void {

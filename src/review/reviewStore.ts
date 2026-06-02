@@ -25,10 +25,22 @@ export interface PerFileState {
   analyzed: boolean;
   /** Findings raised by file-level analysis. */
   findings: Finding[];
-  /** Finding ids the reviewer has manually confirmed. */
+  /** Legacy: finding ids the reviewer marked as "read". Migrated to dispositions on load. */
   confirmedFindings: string[];
+  /** How each finding has been disposed of: fixed, commented out to a PR, or ignored with a reason. */
+  dispositions?: Record<string, FindingDisposition>;
   /** Reviewer translations / notes, persisted with the review. */
   annotations?: Annotation[];
+}
+
+/** A reviewer's terminal decision about a single finding. */
+export interface FindingDisposition {
+  kind: 'fixed' | 'commented' | 'ignored';
+  /** Required for `ignored`; optional context for the other kinds. */
+  reason?: string;
+  /** For `commented`, the PR review-comment id or local target. */
+  ref?: string;
+  at: number;
 }
 
 /** The reviewer's final verdict for a review, persisted once submitted. */

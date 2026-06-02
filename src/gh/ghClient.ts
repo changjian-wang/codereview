@@ -93,3 +93,42 @@ export async function submitPrReview(
   }
   await runGh(args, cwd);
 }
+
+/** Posts a single line-anchored review comment to a PR via the GitHub REST API. */
+export async function postPrLineComment(
+  cwd: string,
+  prNumber: number,
+  commitSha: string,
+  filePath: string,
+  line: number,
+  body: string,
+): Promise<{ id: number; url: string }> {
+  // gh api needs the owner/repo, derivable from the remote.
+  const repoJson = await runGh(['repo', 'view', '--json', 'owner,name'], cwd);
+  let repo: { owner: { login: string }; name: string };
+  try {
+    repo = JSON.parse(repoJson);
+  } catch {
+    throw new GhError('无法解析 gh repo view 返回。');
+  }
+  const slug = `${repo.owner.login}/${repo.name}`;
+  const out = await runGh(
+    [
+      'api',
+      `repos/${slug}/pulls/${prNumber}/comments`,
+      '-X', 'POST',
+      '-f', `body=${body}`,
+      '-f', `commit_id=${commitSha}`,
+      '-f', `path=${filePath}`,
+      '-F', `line=${line}`,
+      '-f', 'side=RIGHT',
+    ],
+    cwd,
+  );
+  try {
+    const parsed = JSON.parse(out);
+    return { id: parsed.id, url: parsed.html_url };
+  } catch {
+    throw new GhError('PR 评论已发送但响应解析失败。');
+  }
+}
