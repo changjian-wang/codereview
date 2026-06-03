@@ -2,7 +2,7 @@
   "name": "codereview",
   "displayName": "Code Review Gate",
   "description": "Distrust-driven code review: per-line coverage gate plus file-level and cross-file AI analysis, powered by the GitHub CLI and VS Code's Copilot models.",
-  "version": "0.0.24",
+  "version": "0.0.25",
   "publisher": "codereview-dev",
   "private": true,
   "license": "MIT",
@@ -133,9 +133,9 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run package",
-    "compile": "node esbuild.js",
+    "compile": "npm run check-types && node esbuild.js",
     "watch": "node esbuild.js --watch",
-    "package": "node esbuild.js --production",
+    "package": "npm run check-types && node esbuild.js --production",
     "check-types": "tsc --noEmit"
   },
   "devDependencies": {

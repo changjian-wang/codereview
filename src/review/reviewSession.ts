@@ -305,7 +305,7 @@ export class ReviewSession {
 
   /** Reviewer confirms they have read the global conclusion. */
   confirmGlobal(): void {
-    if (this.snapshot) {
+    if (this.snapshot?.globalReport) {
       this.snapshot.globalDone = true;
       void this.persist();
     }

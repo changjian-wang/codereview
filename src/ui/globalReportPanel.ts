@@ -53,6 +53,7 @@ export class GlobalReportPanel {
   private static current?: GlobalReportPanel;
   private readonly panel: vscode.WebviewPanel;
   private readonly disposables: vscode.Disposable[] = [];
+  private disposed = false;
   private onLocate: (file: string, line: number) => void;
   private onConfirm: () => void;
   private onGenDiff?: (fix: { file: string; line: number; title: string; detail: string; suggestion?: string }) => void;
@@ -127,6 +128,10 @@ export class GlobalReportPanel {
     GlobalReportPanel.current = instance;
     instance.update(report, confirmed);
     return instance;
+  }
+
+  static closeIfOpen(): void {
+    GlobalReportPanel.current?.panel.dispose();
   }
 
   private update(report: GlobalReport, confirmed: boolean): void {
@@ -460,10 +465,15 @@ export class GlobalReportPanel {
 </html>`;
   }
 
-  dispose(): void {
-    GlobalReportPanel.current = undefined;
-    this.panel.dispose();
-    for (const d of this.disposables) {
+  private dispose(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
+    if (GlobalReportPanel.current === this) {
+      GlobalReportPanel.current = undefined;
+    }
+    for (const d of this.disposables.splice(0)) {
       d.dispose();
     }
   }

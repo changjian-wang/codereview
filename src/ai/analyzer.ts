@@ -108,23 +108,67 @@ export async function explainCode(
   return out.trim();
 }
 
-/** Strips markdown fences and parses the first JSON object in the text. */
+function extractBalancedObject(text: string, start: number): string | undefined {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === '{') {
+      depth++;
+    } else if (ch === '}') {
+      depth--;
+      if (depth === 0) {
+        return text.slice(start, i + 1);
+      }
+    }
+  }
+  return undefined;
+}
+
+/** Strips markdown fences and parses a JSON object from model output. */
 function parseJson<T>(text: string): T {
   let t = text.trim();
   const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const candidates: string[] = [];
   if (fence) {
-    t = fence[1].trim();
+    candidates.push(fence[1].trim());
   }
-  const start = t.indexOf('{');
-  const end = t.lastIndexOf('}');
-  if (start >= 0 && end > start) {
-    t = t.slice(start, end + 1);
+  candidates.push(t);
+  const balancedObjects: string[] = [];
+  for (let start = t.indexOf('{'); start >= 0; start = t.indexOf('{', start + 1)) {
+    const object = extractBalancedObject(t, start);
+    if (object) {
+      balancedObjects.push(object);
+    }
   }
-  try {
-    return JSON.parse(t) as T;
-  } catch {
-    throw new AnalysisError('无法解析模型返回的 JSON。');
+  candidates.push(...balancedObjects.sort((a, b) => b.length - a.length));
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    if (seen.has(candidate)) {
+      continue;
+    }
+    seen.add(candidate);
+    try {
+      return JSON.parse(candidate) as T;
+    } catch {
+      // Try the next plausible JSON object before surfacing a user-facing error.
+    }
   }
+  const preview = t.replace(/\s+/g, ' ').slice(0, 500);
+  throw new AnalysisError(`无法解析模型返回的 JSON。返回预览：${preview}${t.length > 500 ? '…' : ''}`);
 }
 
 function normaliseSeverity(value: unknown): FindingSeverity {
@@ -197,22 +241,20 @@ export async function analyzeGlobal(
   files: GlobalContextFile[],
   token: vscode.CancellationToken,
 ): Promise<GlobalReport> {
-  let budget = MAX_TOTAL_CHARS;
+  const perFileBudget = Math.max(
+    1,
+    Math.min(MAX_FILE_CHARS, Math.floor(MAX_TOTAL_CHARS / Math.max(1, files.length))),
+  );
   const sections = files.map((f) => {
     const findings = f.findings.length
       ? f.findings.map((x) => `  - [${x.severity}] L${x.line} ${x.title}`).join('\n')
       : '  - （文件级未发现问题）';
 
     let source = f.content ?? '';
-    let truncated = source.length > MAX_FILE_CHARS;
+    let truncated = source.length > perFileBudget;
     if (truncated) {
-      source = source.slice(0, MAX_FILE_CHARS);
+      source = source.slice(0, perFileBudget);
     }
-    if (source.length > budget) {
-      source = source.slice(0, Math.max(0, budget));
-      truncated = true;
-    }
-    budget -= source.length;
 
     const numbered = source ? numberifyLines(source) : '（源码不可用）';
     const note = truncated ? '\n…（源码因长度被截断）' : '';

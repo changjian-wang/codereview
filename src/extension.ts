@@ -39,6 +39,26 @@ let preferredDefaultCwd: string | undefined;
 let layoutAppliedForCurrentReview = false;
 /** Relative paths with an in-flight single-file analysis, used to de-dupe concurrent runs. */
 const analyzingPaths = new Set<string>();
+/** Prevents duplicate global analysis calls for the same active review. */
+let globalAnalysisInFlight = false;
+
+function isReviewPath(relPath: string): boolean {
+  return !!session.reviewSet?.files.some((f) => f.path === relPath);
+}
+
+function ensureReviewPath(relPath: string, action: string): boolean {
+  if (isReviewPath(relPath)) {
+    return true;
+  }
+  void vscode.window.showWarningMessage(`Code Review：${relPath} 不在当前审查范围内，已跳过${action}。`);
+  return false;
+}
+
+function closeScopeBoundPanels(): void {
+  DocumentPanel.closeIfOpen();
+  FixProposalPanel.closeIfOpen();
+  GlobalReportPanel.closeIfOpen();
+}
 
 function reviewFileStatus(relPath: string): string | undefined {
   return session.reviewSet?.files.find((f) => f.path === relPath)?.status;
@@ -224,6 +244,7 @@ async function loadFolderAsReview(cwd: string): Promise<void> {
         const { scope: source, cwd: rootCwd } = picked;
         const reviewSet = await source.load(rootCwd);
         await session.start(reviewSet, rootCwd);
+        closeScopeBoundPanels();
         workbenchSelected = undefined;
         docRenderCache.clear();
         appliedFixes.clear();
@@ -265,6 +286,7 @@ async function startReview(): Promise<void> {
       try {
         const reviewSet = await source.load(cwd);
         await session.start(reviewSet, cwd);
+        closeScopeBoundPanels();
         workbenchSelected = undefined;
         docRenderCache.clear();
         appliedFixes.clear();
@@ -440,6 +462,9 @@ function buildWorkbenchState(): WorkbenchState {
 
 /** Opens a review file in the document webview beside the workbench. */
 async function openFileInPanel(relPath: string): Promise<void> {
+  if (!ensureReviewPath(relPath, '打开')) {
+    return;
+  }
   // Switching to a different file invalidates any open fix-proposal panel
   // (it's scoped to one finding in the file we're leaving).
   if (workbenchSelected !== relPath) {
@@ -541,6 +566,10 @@ function refreshDocPanel(relPath: string): void {
  * (e.g. a Copilot fix was applied).
  */
 async function reloadDocPanel(relPath: string): Promise<void> {
+  if (!isReviewPath(relPath)) {
+    docRenderCache.delete(relPath);
+    return;
+  }
   if (DocumentPanel.currentPath !== relPath) {
     docRenderCache.delete(relPath);
     return;
@@ -558,6 +587,9 @@ async function reloadDocPanel(relPath: string): Promise<void> {
  * (file was edited by hand after applying). Returns whether the revert happened.
  */
 async function revertAppliedFix(rel: string, findingId: string): Promise<boolean> {
+  if (!ensureReviewPath(rel, '撤销修复')) {
+    return false;
+  }
   const edit = appliedFixes.get(fixKey(rel, findingId));
   if (!edit) {
     return false;
@@ -730,6 +762,9 @@ async function annotateWithNote(
  * (which includes unsaved edits) over the on-disk copy.
  */
 async function readReviewFileText(relPath: string): Promise<string> {
+  if (!ensureReviewPath(relPath, '读取')) {
+    return '';
+  }
   if (isDeletedReviewFile(relPath)) {
     return '（文件已删除，当前分支中不存在源内容；请在整体审查中确认删除影响。）';
   }
@@ -761,6 +796,9 @@ async function analyzeCurrentFile(): Promise<void> {
 
 /** Analyzes a specific review file by its relative path. */
 async function analyzeByPath(rel: string): Promise<void> {
+  if (!ensureReviewPath(rel, '分析')) {
+    return;
+  }
   if (isDeletedReviewFile(rel)) {
     transientInfo(`${rel} 是删除文件，已作为无需源文件分析处理`);
     return;
@@ -899,6 +937,9 @@ async function viewFixProposal(rel: string, findingId: string): Promise<void> {
   if (!session.reviewSet) {
     return;
   }
+  if (!ensureReviewPath(rel, '查看修复方案')) {
+    return;
+  }
   const finding = session.findings(rel).find((f) => f.id === findingId);
   if (!finding) {
     return;
@@ -914,6 +955,9 @@ async function viewFixProposal(rel: string, findingId: string): Promise<void> {
 async function disposeFinding(rel: string, findingId: string, kind: FindingDispositionKind): Promise<void> {
   const reviewSet = session.reviewSet;
   if (!reviewSet) {
+    return;
+  }
+  if (!ensureReviewPath(rel, '处置问题')) {
     return;
   }
   const current = session.findingDisposition(rel, findingId);
@@ -1087,6 +1131,10 @@ async function runGlobalAnalysis(): Promise<void> {
     transientWarning('尚未开始审查');
     return;
   }
+  if (globalAnalysisInFlight) {
+    transientInfo('全局分析正在进行中，请稍候');
+    return;
+  }
   const unready = reviewSet.files.filter((f) => !session.fileFullySeen(f.path));
   if (unready.length) {
     const pick = await vscode.window.showWarningMessage(
@@ -1104,28 +1152,33 @@ async function runGlobalAnalysis(): Promise<void> {
     return;
   }
 
-  await runWithProgress('Code Review：全局逻辑分析', async (token, report) => {
-    try {
-      const context: GlobalContextFile[] = [];
-      for (const f of reviewSet.files) {
-        report(`读取 ${f.path}…`);
-        context.push({
-          path: f.path,
-          findings: session.findings(f.path),
-          content: await readReviewFileText(f.path),
-        });
+  globalAnalysisInFlight = true;
+  try {
+    await runWithProgress('Code Review：全局逻辑分析', async (token, report) => {
+      try {
+        const context: GlobalContextFile[] = [];
+        for (const f of reviewSet.files) {
+          report(`读取 ${f.path}…`);
+          context.push({
+            path: f.path,
+            findings: session.findings(f.path),
+            content: await readReviewFileText(f.path),
+          });
+        }
+        report('调用模型进行跨文件分析…');
+        const globalReport = await analyzeGlobal(model, context, token);
+        if (session.reviewSet !== reviewSet) {
+          return;
+        }
+        session.setGlobalReport(globalReport);
+        showGlobalReport();
+      } catch (err) {
+        reportError(err);
       }
-      report('调用模型进行跨文件分析…');
-      const globalReport = await analyzeGlobal(model, context, token);
-      if (session.reviewSet !== reviewSet) {
-        return;
-      }
-      session.setGlobalReport(globalReport);
-      showGlobalReport();
-    } catch (err) {
-      reportError(err);
-    }
-  });
+    });
+  } finally {
+    globalAnalysisInFlight = false;
+  }
 }
 
 function showGlobalReport(): void {
@@ -1202,14 +1255,22 @@ async function generateCandidateDiff(fix: {
 }
 
 async function locateInFile(relPath: string, line: number): Promise<void> {
+  if (!ensureReviewPath(relPath, '定位')) {
+    return;
+  }
   if (DocumentPanel.currentPath !== relPath) {
     await openFileInPanel(relPath);
   }
-  DocumentPanel.scrollTo(line);
+  const total = session.fileState(relPath)?.totalLines ?? 0;
+  const normalizedLine = Math.max(1, Math.floor(Number.isFinite(line) ? line : 1));
+  DocumentPanel.scrollTo(total > 0 ? Math.min(normalizedLine, total) : normalizedLine);
 }
 
 /** Computes the next not-yet-seen line in a file and scrolls the panel to it. */
 function jumpToNextUnseen(relPath: string): void {
+  if (!ensureReviewPath(relPath, '跳转')) {
+    return;
+  }
   const state = session.fileState(relPath);
   if (!state) {
     return;
