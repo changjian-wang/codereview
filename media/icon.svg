@@ -1,39 +1,42 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#3b2a55"/>
-      <stop offset="1" stop-color="#1c1230"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2b2540"/>
+      <stop offset="1" stop-color="#15101f"/>
     </linearGradient>
-    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#d6a6dd"/>
-      <stop offset="1" stop-color="#9b6fbf"/>
+    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2f2a44"/>
+      <stop offset="1" stop-color="#241f36"/>
     </linearGradient>
-    <radialGradient id="glass" cx="0.35" cy="0.3" r="0.85">
-      <stop offset="0" stop-color="#ffffff" stop-opacity="0.18"/>
-      <stop offset="0.6" stop-color="#ffffff" stop-opacity="0.04"/>
-      <stop offset="1" stop-color="#000000" stop-opacity="0.18"/>
+    <linearGradient id="lens" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#c8a6e8"/>
+      <stop offset="1" stop-color="#8a63c4"/>
+    </linearGradient>
+    <radialGradient id="glass" cx="0.35" cy="0.3" r="0.9">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.22"/>
+      <stop offset="0.55" stop-color="#ffffff" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.10"/>
     </radialGradient>
   </defs>
 
-  <rect x="0" y="0" width="128" height="128" rx="24" ry="24" fill="url(#bg)"/>
+  <rect x="0" y="0" width="128" height="128" rx="28" ry="28" fill="url(#bg)"/>
 
-  <g transform="rotate(-30 56 56)">
-    <rect x="48" y="74" width="14" height="44" rx="7" ry="7" fill="#9b6fbf"/>
-    <rect x="50" y="76" width="10" height="22" rx="5" ry="5" fill="#c69ad8" opacity="0.55"/>
+  <!-- code card -->
+  <g>
+    <rect x="26" y="26" width="58" height="72" rx="9" ry="9" fill="url(#card)" stroke="#3d3658" stroke-width="2"/>
+    <rect x="37" y="40" width="34" height="5" rx="2.5" fill="#e9e0fb" opacity="0.9"/>
+    <rect x="37" y="52" width="22" height="5" rx="2.5" fill="#c586c0"/>
+    <rect x="37" y="64" width="30" height="5" rx="2.5" fill="#e9e0fb" opacity="0.55"/>
+    <rect x="37" y="76" width="16" height="5" rx="2.5" fill="#4ec9b0"/>
   </g>
 
-  <circle cx="54" cy="54" r="36" fill="url(#glass)" stroke="url(#ring)" stroke-width="7"/>
-  <circle cx="54" cy="54" r="32" fill="#1a1228" opacity="0.55"/>
-
-  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="9" fill="#e6dcf5">
-    <rect x="34" y="40" width="20" height="3" rx="1.2" fill="#e6dcf5" opacity="0.85"/>
-    <rect x="34" y="48" width="32" height="3" rx="1.2" fill="#c586c0"/>
-    <rect x="34" y="56" width="14" height="3" rx="1.2" fill="#e6dcf5" opacity="0.55"/>
-    <rect x="34" y="64" width="28" height="3" rx="1.2" fill="#e6dcf5" opacity="0.85"/>
-  </g>
-
-  <g transform="translate(86 86)">
-    <circle r="20" fill="#1c1230" stroke="#4ec9b0" stroke-width="3"/>
-    <path d="M -8 1 L -2 7 L 9 -6" fill="none" stroke="#4ec9b0" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- magnifier -->
+  <g transform="translate(80 76)">
+    <line x1="22" y1="22" x2="40" y2="40" stroke="#15101f" stroke-width="13" stroke-linecap="round"/>
+    <line x1="22" y1="22" x2="40" y2="40" stroke="url(#lens)" stroke-width="9" stroke-linecap="round"/>
+    <circle cx="0" cy="0" r="25" fill="#15101f"/>
+    <circle cx="0" cy="0" r="25" fill="url(#glass)"/>
+    <circle cx="0" cy="0" r="25" fill="none" stroke="url(#lens)" stroke-width="8"/>
+    <path d="M -10 1 L -2 9 L 12 -8" fill="none" stroke="#4ec9b0" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
   </g>
 </svg>

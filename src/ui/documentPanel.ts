@@ -89,7 +89,9 @@ export class DocumentPanel {
       const panel = vscode.window.createWebviewPanel(
         'codereview.document',
         '文件查看',
-        vscode.ViewColumn.Two,
+        // Open beside the active group (the workbench), so it lands in the same
+        // window the workbench currently lives in — including a popped-out window.
+        { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
         { enableScripts: true, retainContextWhenHidden: true },
       );
       DocumentPanel.current = new DocumentPanel(panel, actions);
@@ -98,7 +100,7 @@ export class DocumentPanel {
     inst.actions = actions;
     inst.model = model;
     inst.panel.title = `📄 ${model.name}`;
-    inst.panel.reveal(vscode.ViewColumn.Two, true);
+    inst.panel.reveal(undefined, true);
     if (inst.ready) {
       inst.post();
     }
@@ -296,6 +298,7 @@ export class DocumentPanel {
   .reading h1,.reading h2,.reading h3 { border-bottom:1px solid var(--line); padding-bottom:.2em; }
   .reading code { background:var(--elevated); padding:.1em .35em; border-radius:4px; font-family:var(--vscode-editor-font-family, monospace); }
   .reading pre { background:var(--elevated); padding:12px 14px; border-radius:8px; overflow:auto; }
+  .reading pre.frontmatter { border-left:3px solid var(--purple); opacity:.92; }
   .reading pre code { background:none; padding:0; }
   .reading a { color:var(--blue); }
   .reading table { border-collapse:collapse; }

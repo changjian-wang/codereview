@@ -142,8 +142,35 @@ export function renderDocument(text: string, languageId: string, fileName: strin
 
   return {
     isMarkdown,
-    readingHtml: isMarkdown ? md.render(text) : undefined,
+    readingHtml: isMarkdown ? renderMarkdownReading(text) : undefined,
     sourceLines: sourceLines.slice(0, rawLines.length),
     totalLines: rawLines.length,
   };
+}
+
+/**
+ * Renders markdown for the reading view. Leading YAML front matter (a `---`
+ * fenced block at the very top) is shown as a highlighted YAML code block rather
+ * than being parsed as markdown, where its closing `---` would otherwise be
+ * misread as a setext heading and bold the whole block.
+ */
+function renderMarkdownReading(text: string): string {
+  const fm = extractFrontMatter(text);
+  if (!fm) {
+    return md.render(text);
+  }
+  const highlighted = hljs.getLanguage('yaml')
+    ? hljs.highlight(fm.yaml, { language: 'yaml', ignoreIllegals: true }).value
+    : escapeHtml(fm.yaml);
+  const block = `<pre class="frontmatter"><code class="hljs language-yaml">${highlighted}</code></pre>\n`;
+  return block + md.render(fm.body);
+}
+
+/** Splits leading `---` … `---` YAML front matter from the markdown body. */
+function extractFrontMatter(text: string): { yaml: string; body: string } | undefined {
+  const match = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(text);
+  if (!match) {
+    return undefined;
+  }
+  return { yaml: match[1], body: text.slice(match[0].length) };
 }

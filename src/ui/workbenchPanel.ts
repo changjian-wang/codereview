@@ -116,6 +116,10 @@ export class WorkbenchPanel {
     const instance = new WorkbenchPanel(panel, getState, actions);
     WorkbenchPanel.current = instance;
     instance.refresh();
+    // Pop the workbench out into a separate editor window so the review UI does
+    // not consume the current window. The panel is the active editor right after
+    // creation, so the move command targets it.
+    void vscode.commands.executeCommand('workbench.action.moveEditorToNewWindow');
     return instance;
   }
 
