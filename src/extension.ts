@@ -37,6 +37,8 @@ const appliedFixes = new Map<string, { oldText: string; newText: string }>();
 let preferredDefaultCwd: string | undefined;
 /** True once the 3:7 editor layout has been applied for the current review. */
 let layoutAppliedForCurrentReview = false;
+/** Relative paths with an in-flight single-file analysis, used to de-dupe concurrent runs. */
+const analyzingPaths = new Set<string>();
 
 function reviewFileStatus(relPath: string): string | undefined {
   return session.reviewSet?.files.find((f) => f.path === relPath)?.status;
@@ -763,6 +765,10 @@ async function analyzeByPath(rel: string): Promise<void> {
     transientInfo(`${rel} 是删除文件，已作为无需源文件分析处理`);
     return;
   }
+  if (analyzingPaths.has(rel)) {
+    transientInfo(`${rel} 正在分析中，请稍候`);
+    return;
+  }
   const cwd = activeCwd();
   if (!cwd) {
     return;
@@ -782,23 +788,35 @@ async function analyzeByPath(rel: string): Promise<void> {
     return;
   }
 
+  // Capture the review identity so a result computed against an older review set
+  // (the user may switch scope mid-analysis) is discarded instead of overwriting
+  // the current session's findings.
+  const reviewSet = session.reviewSet;
   const fileName = rel.split('/').pop() ?? rel;
-  await runWithProgress(`Code Review：分析 ${rel}`, async (token, report) => {
-    try {
-      report(`调用模型分析 ${fileName}…`);
-      const findings = await analyzeFile(model, document, token);
-      report('写入发现…');
-      session.setFindings(rel, findings);
-      refreshDocPanel(rel);
-      transientInfo(
-        findings.length
-          ? `${rel} 发现 ${findings.length} 个问题`
-          : `${rel} 未发现问题`,
-      );
-    } catch (err) {
-      reportError(err);
-    }
-  });
+  analyzingPaths.add(rel);
+  try {
+    await runWithProgress(`Code Review：分析 ${rel}`, async (token, report) => {
+      try {
+        report(`调用模型分析 ${fileName}…`);
+        const findings = await analyzeFile(model, document, token);
+        if (session.reviewSet !== reviewSet) {
+          return;
+        }
+        report('写入发现…');
+        session.setFindings(rel, findings);
+        refreshDocPanel(rel);
+        transientInfo(
+          findings.length
+            ? `${rel} 发现 ${findings.length} 个问题`
+            : `${rel} 未发现问题`,
+        );
+      } catch (err) {
+        reportError(err);
+      }
+    });
+  } finally {
+    analyzingPaths.delete(rel);
+  }
 }
 
 /**
@@ -1099,6 +1117,9 @@ async function runGlobalAnalysis(): Promise<void> {
       }
       report('调用模型进行跨文件分析…');
       const globalReport = await analyzeGlobal(model, context, token);
+      if (session.reviewSet !== reviewSet) {
+        return;
+      }
       session.setGlobalReport(globalReport);
       showGlobalReport();
     } catch (err) {
@@ -1145,6 +1166,12 @@ async function generateCandidateDiff(fix: {
 }): Promise<void> {
   const cwd = activeCwd();
   if (!cwd) {
+    return;
+  }
+  // The fix spot comes from the model's global report; only act on files that
+  // are actually part of the current review set to avoid reading arbitrary paths.
+  if (!session.reviewSet?.files.some((f) => f.path === fix.file)) {
+    void vscode.window.showWarningMessage(`Code Review：${fix.file} 不在当前审查范围内，已跳过。`);
     return;
   }
   const model = await models.resolve();

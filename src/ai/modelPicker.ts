@@ -41,12 +41,3 @@ export async function pickModel(): Promise<PickedModel | undefined> {
   });
   return choice?.value;
 }
-
-/** Resolves an actual chat model, honouring an explicit pick or falling back to Auto. */
-export async function resolveModel(picked?: PickedModel): Promise<vscode.LanguageModelChat | undefined> {
-  if (picked?.model) {
-    return picked.model;
-  }
-  const models = await vscode.lm.selectChatModels({ vendor: 'copilot' });
-  return models[0];
-}

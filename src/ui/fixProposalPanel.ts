@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import type { FixProposal } from '../ai/analyzer';
-import { escAttr as escapeHtml } from './html';
+import { escAttr as escapeHtml, nonce as makeNonce } from './html';
 
 /** Inputs needed to drive the panel. */
 export interface FixProposalRequest {
@@ -465,9 +465,12 @@ export class FixProposalPanel {
 
   private renderHtml(): string {
     const initial = JSON.stringify(this.state);
+    const nonce = makeNonce();
+    const csp = `default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';`;
     return /* html */ `<!DOCTYPE html>
 <html lang="zh-CN">
 <head><meta charset="UTF-8"/>
+<meta http-equiv="Content-Security-Policy" content="${csp}" />
 <style>
   :root { color-scheme: light dark; }
   body { font-family: var(--vscode-font-family); color: var(--vscode-foreground); background: var(--vscode-editor-background); margin: 0; padding: 16px 20px 40px; }
@@ -520,7 +523,7 @@ export class FixProposalPanel {
     <button id="cancel">关闭</button>
   </div>
   <div id="body"></div>
-  <script>
+  <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const body = document.getElementById('body');
     document.getElementById('regenerate').addEventListener('click', () => vscode.postMessage({ type: 'regenerate' }));
