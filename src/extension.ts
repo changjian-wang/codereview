@@ -15,6 +15,7 @@ import {
   AnalysisError,
   type GlobalContextFile,
 } from './ai/analyzer';
+import type { Finding } from './ai/types';
 import { pickScope, buildFolderScope } from './scope/scopePicker';
 import { submitPrReview, postPrLineComment } from './gh/ghClient';
 import { GlobalReportPanel } from './ui/globalReportPanel';
@@ -179,15 +180,22 @@ async function openInNewWindow(
   // node_modules / dist / bin / obj / ...). The user can still narrow down later
   // via the 「切换范围…」 button inside the workbench.
   await loadFolderAsReview(chosenCwd);
-  await openWorkbench();
-  // Pop the active editor (which is our workbench webview) into a separate
-  // window so it behaves like VS Code's "Open in Agents Window". This is a
-  // built-in command available since 1.85.
+  // Create the workbench but DON'T open the first file yet — we want the document
+  // viewer to land beside the workbench *after* it has been moved to its own
+  // window, not in the current one.
+  await openWorkbench({ deferInitialFile: true });
+  // Pop the active editor (our workbench webview) into a separate window so it
+  // behaves like VS Code's "Open in Agents Window" (built-in since 1.85).
   try {
     await vscode.commands.executeCommand('workbench.action.moveEditorToNewWindow');
   } catch (err) {
     console.warn('[codereview] moveEditorToNewWindow failed:', err);
   }
+  // Drop any stale document panel left in the previous window, then open the
+  // first file. With the workbench now the active editor in the new window,
+  // ViewColumn.Beside places the document beside it in that same window.
+  DocumentPanel.closeIfOpen();
+  await openInitialFileAndLayout();
 }
 
 /** Loads the entire folder at `cwd` as the current review set. */
@@ -208,6 +216,8 @@ async function loadFolderAsReview(cwd: string): Promise<void> {
         await session.start(reviewSet, rootCwd);
         workbenchSelected = undefined;
         docRenderCache.clear();
+        appliedFixes.clear();
+        WorkbenchPanel.resetFolders();
         layoutAppliedForCurrentReview = false;
         void vscode.commands.executeCommand('setContext', 'codereview.active', true);
         transientInfo(`已加载 ${reviewSet.label} · ${reviewSet.files.length} 个文件`);
@@ -247,6 +257,8 @@ async function startReview(): Promise<void> {
         await session.start(reviewSet, cwd);
         workbenchSelected = undefined;
         docRenderCache.clear();
+        appliedFixes.clear();
+        WorkbenchPanel.resetFolders();
         layoutAppliedForCurrentReview = false;
         void vscode.commands.executeCommand('setContext', 'codereview.active', true);
         await openWorkbench();
@@ -269,7 +281,7 @@ async function selectModel(): Promise<void> {
 }
 
 /** Opens (or reveals) the Review Workbench webview. */
-async function openWorkbench(): Promise<void> {
+async function openWorkbench(opts: { deferInitialFile?: boolean } = {}): Promise<void> {
   WorkbenchPanel.show(buildWorkbenchState, {
     open: (path) => void openFileInPanel(path),
     analyze: (path) => void analyzeByPath(path),
@@ -282,6 +294,12 @@ async function openWorkbench(): Promise<void> {
     pickModel: () => void selectModel(),
     pickScope: () => void startReview(),
   });
+  // When the caller is about to relocate the workbench to another window
+  // (openInNewWindow), it opens the first file and applies the layout itself
+  // *after* the move so the document lands beside the relocated workbench.
+  if (opts.deferInitialFile) {
+    return;
+  }
   if (session.reviewSet && !workbenchSelected) {
     const first = [...session.reviewSet.files].sort((a, b) => a.path.localeCompare(b.path))[0];
     if (first) {
@@ -289,6 +307,21 @@ async function openWorkbench(): Promise<void> {
     }
   }
   if (session.reviewSet && !layoutAppliedForCurrentReview) {
+    layoutAppliedForCurrentReview = true;
+    await applyWorkbenchLayout();
+  }
+}
+
+/** Opens the alphabetically-first review file and applies the split layout. */
+async function openInitialFileAndLayout(): Promise<void> {
+  if (!session.reviewSet) {
+    return;
+  }
+  const first = [...session.reviewSet.files].sort((a, b) => a.path.localeCompare(b.path))[0];
+  if (first) {
+    await openFileInPanel(first.path);
+  }
+  if (!layoutAppliedForCurrentReview) {
     layoutAppliedForCurrentReview = true;
     await applyWorkbenchLayout();
   }
@@ -397,6 +430,11 @@ function buildWorkbenchState(): WorkbenchState {
 
 /** Opens a review file in the document webview beside the workbench. */
 async function openFileInPanel(relPath: string): Promise<void> {
+  // Switching to a different file invalidates any open fix-proposal panel
+  // (it's scoped to one finding in the file we're leaving).
+  if (workbenchSelected !== relPath) {
+    FixProposalPanel.closeIfOpen();
+  }
   workbenchSelected = relPath;
   const text = await readReviewFileText(relPath);
   const render = renderFor(relPath, text);
@@ -568,6 +606,7 @@ function docActions() {
     disposeFinding: (path: string, id: string, kind: FindingDispositionKind) => {
       void disposeFinding(path, id, kind);
     },
+    viewFix: (path: string, id: string) => void viewFixProposal(path, id),
     locate: (path: string, line: number) => void locateInFile(path, line),
     analyze: (path: string) => void analyzeByPath(path),
     jumpNext: (path: string) => jumpToNextUnseen(path),
@@ -748,6 +787,92 @@ async function analyzeByPath(rel: string): Promise<void> {
 }
 
 /**
+ * Opens (or reveals) the fix-proposal panel for a finding. Cached proposals are
+ * restored automatically; applying one flips the finding's disposition to
+ * `fixed`. This does NOT itself change the disposition — it's a pure entry point
+ * shared by the "Copilot 修复" button and the clickable finding header.
+ */
+async function openFixProposal(rel: string, finding: Finding): Promise<void> {
+  const cwd = activeCwd();
+  if (!cwd) {
+    return;
+  }
+  const findingId = finding.id;
+  await locateInFile(rel, finding.line);
+  const fileUri = vscode.Uri.joinPath(vscode.Uri.file(cwd), rel);
+  FixProposalPanel.show({
+    rel,
+    fileUri,
+    finding: {
+      id: finding.id,
+      line: finding.line,
+      title: finding.title,
+      detail: finding.detail,
+      suggestion: finding.suggestion,
+    },
+    generate: async (token) => {
+      const model = await models.resolve();
+      if (!model) {
+        const prompt = composeFixPrompt(finding);
+        try {
+          await vscode.env.clipboard.writeText(prompt);
+        } catch {
+          // ignore clipboard failures
+        }
+        throw new Error('未找到可用的 Copilot 模型；已把修复提示词复制到剪贴板，可粘到 Copilot Chat 使用。');
+      }
+      const content = await readReviewFileText(rel);
+      return generateFixProposals(
+        model,
+        rel,
+        content,
+        {
+          title: finding.title,
+          detail: finding.detail,
+          suggestion: finding.suggestion,
+          line: finding.line,
+          endLine: finding.endLine,
+        },
+        token,
+      );
+    },
+    onApplied: (edit) => {
+      appliedFixes.set(fixKey(rel, findingId), edit);
+      session.setFindingDisposition(rel, findingId, { kind: 'fixed', at: Date.now() });
+      WorkbenchPanel.refreshIfOpen();
+      refreshDocPanel(rel);
+      transientInfo('修复已应用，已标记为「已 Copilot 修复」');
+    },
+    onUndone: () => {
+      appliedFixes.delete(fixKey(rel, findingId));
+      session.setFindingDisposition(rel, findingId, null);
+      WorkbenchPanel.refreshIfOpen();
+      refreshDocPanel(rel);
+    },
+    onFileChanged: () => {
+      void reloadDocPanel(rel);
+    },
+  });
+}
+
+/**
+ * Opens the fix-proposal panel for *viewing* a finding's proposals (cached or
+ * freshly generated) without altering its disposition. Wired to the clickable
+ * finding header so reviewers can re-inspect a proposal even after the finding
+ * has been disposed.
+ */
+async function viewFixProposal(rel: string, findingId: string): Promise<void> {
+  if (!session.reviewSet) {
+    return;
+  }
+  const finding = session.findings(rel).find((f) => f.id === findingId);
+  if (!finding) {
+    return;
+  }
+  await openFixProposal(rel, finding);
+}
+
+/**
  * Routes the reviewer's disposition for a finding to the appropriate side effect
  * (invoke Copilot inline chat, post PR line comment, or capture an ignore reason)
  * and persists the result so the gate can advance.
@@ -782,61 +907,7 @@ async function disposeFinding(rel: string, findingId: string, kind: FindingDispo
   }
 
   if (kind === 'fixed') {
-    await locateInFile(rel, finding.line);
-    const fileUri = vscode.Uri.joinPath(vscode.Uri.file(cwd), rel);
-    FixProposalPanel.show({
-      rel,
-      fileUri,
-      finding: {
-        id: finding.id,
-        line: finding.line,
-        title: finding.title,
-        detail: finding.detail,
-        suggestion: finding.suggestion,
-      },
-      generate: async (token) => {
-        const model = await models.resolve();
-        if (!model) {
-          const prompt = composeFixPrompt(finding);
-          try {
-            await vscode.env.clipboard.writeText(prompt);
-          } catch {
-            // ignore clipboard failures
-          }
-          throw new Error('未找到可用的 Copilot 模型；已把修复提示词复制到剪贴板，可粘到 Copilot Chat 使用。');
-        }
-        const content = await readReviewFileText(rel);
-        return generateFixProposals(
-          model,
-          rel,
-          content,
-          {
-            title: finding.title,
-            detail: finding.detail,
-            suggestion: finding.suggestion,
-            line: finding.line,
-            endLine: finding.endLine,
-          },
-          token,
-        );
-      },
-      onApplied: (edit) => {
-        appliedFixes.set(fixKey(rel, findingId), edit);
-        session.setFindingDisposition(rel, findingId, { kind: 'fixed', at: Date.now() });
-        WorkbenchPanel.refreshIfOpen();
-        refreshDocPanel(rel);
-        transientInfo('修复已应用，已标记为「已 Copilot 修复」');
-      },
-      onUndone: () => {
-        appliedFixes.delete(fixKey(rel, findingId));
-        session.setFindingDisposition(rel, findingId, null);
-        WorkbenchPanel.refreshIfOpen();
-        refreshDocPanel(rel);
-      },
-      onFileChanged: () => {
-        void reloadDocPanel(rel);
-      },
-    });
+    await openFixProposal(rel, finding);
     return;
   } else if (kind === 'commented') {
     const prMatch = reviewSet.scopeId.match(/^pr-(\d+)$/);

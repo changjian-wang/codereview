@@ -6,6 +6,7 @@ import type {
   VerdictKind,
 } from '../ai/types';
 import { transientInfo } from './toast';
+import { esc, escAttr, nonce as makeNonce } from './html';
 
 const SEVERITY_LABEL: Record<FindingSeverity, string> = {
   bug: '真 Bug',
@@ -133,7 +134,7 @@ export class GlobalReportPanel {
   }
 
   private render(report: GlobalReport, confirmed: boolean): string {
-    const nonce = String(Math.random()).slice(2);
+    const nonce = makeNonce();
     const csp = `default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';`;
     const evidence = report.evidence.length
       ? `<div class="evidence-steps">${report.evidence
@@ -468,13 +469,4 @@ export class GlobalReportPanel {
   }
 }
 
-function esc(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
 
-function escAttr(s: string): string {
-  return esc(s).replace(/"/g, '&quot;');
-}

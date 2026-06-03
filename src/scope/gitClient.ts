@@ -4,16 +4,21 @@ import type { ReviewFile } from './types';
 
 const pexec = promisify(execFile);
 const MAX_BUFFER = 32 * 1024 * 1024;
+/** Hard ceiling so a hung git process can never freeze the review UI. */
+const GIT_TIMEOUT_MS = 30_000;
 
 /** Raised for any git failure with a user-facing message. */
 export class GitError extends Error {}
 
 async function git(args: string[], cwd: string): Promise<string> {
   try {
-    const { stdout } = await pexec('git', args, { cwd, maxBuffer: MAX_BUFFER });
+    const { stdout } = await pexec('git', args, { cwd, maxBuffer: MAX_BUFFER, timeout: GIT_TIMEOUT_MS });
     return stdout;
   } catch (err) {
-    const e = err as { stderr?: string; message?: string };
+    const e = err as { stderr?: string; message?: string; killed?: boolean; signal?: string };
+    if (e.killed || e.signal === 'SIGTERM') {
+      throw new GitError(`git ${args[0]} 执行超时（${GIT_TIMEOUT_MS / 1000}s）。`);
+    }
     throw new GitError((e.stderr || e.message || String(err)).trim());
   }
 }

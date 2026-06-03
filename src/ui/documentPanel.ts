@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { nonce as makeNonce } from './html';
 
 export type DocFindingDisposition = 'fixed' | 'commented' | 'ignored';
 
@@ -47,6 +48,8 @@ export interface DocActions {
   note(path: string, startLine: number, endLine: number, text: string): void;
   removeAnnotation(path: string, id: string): void;
   disposeFinding(path: string, id: string, kind: DocFindingDisposition): void;
+  /** Opens the fix-proposal panel for a finding to *view* it, without changing its disposition. */
+  viewFix(path: string, id: string): void;
   locate(path: string, line: number): void;
   analyze(path: string): void;
   jumpNext(path: string): void;
@@ -60,6 +63,7 @@ type Inbound =
   | { type: 'note'; startLine: number; endLine: number; text: string }
   | { type: 'removeAnnotation'; id: string }
   | { type: 'dispose'; id: string; kind: DocFindingDisposition }
+  | { type: 'viewFix'; id: string }
   | { type: 'locate'; line: number }
   | { type: 'analyze' }
   | { type: 'jumpNext' };
@@ -126,6 +130,15 @@ export class DocumentPanel {
     return !!DocumentPanel.current;
   }
 
+  /**
+   * Disposes the current document panel, if any. Used when the workbench moves
+   * to another window so the next file opens beside it instead of being stranded
+   * in the window where the panel was first created.
+   */
+  static closeIfOpen(): void {
+    DocumentPanel.current?.panel.dispose();
+  }
+
   /** Switches to source view and scrolls a line into view. */
   static scrollTo(line: number): void {
     const inst = DocumentPanel.current;
@@ -168,6 +181,9 @@ export class DocumentPanel {
       case 'dispose':
         this.actions.disposeFinding(path, m.id, m.kind);
         break;
+      case 'viewFix':
+        this.actions.viewFix(path, m.id);
+        break;
       case 'locate':
         this.actions.locate(path, m.line);
         break;
@@ -188,7 +204,7 @@ export class DocumentPanel {
   }
 
   private shell(): string {
-    const nonce = String(Math.random()).slice(2);
+    const nonce = makeNonce();
     const csp = `default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';`;
     return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -339,6 +355,10 @@ export class DocumentPanel {
   .finding.conditional .f-tag { background:rgba(216,192,32,.14); color:var(--yellow); }
   .finding.suggestion .f-tag { background:rgba(86,156,214,.16); color:var(--blue); }
   .f-title { font-weight:600; flex:1; }
+  .f-head.viewable { cursor:pointer; }
+  .f-head.viewable:hover .f-title { text-decoration:underline; text-underline-offset:2px; }
+  .f-head .f-fix-hint { font-size:11px; color:var(--vscode-descriptionForeground, #999); flex:none; opacity:0; transition:opacity .1s; }
+  .f-head.viewable:hover .f-fix-hint { opacity:1; }
   .f-line { font-family:var(--vscode-editor-font-family, monospace); font-size:11px; color:var(--blue); flex:none; }
   .f-body { padding:0 10px 8px; }
   .f-detail { margin:0 0 6px; line-height:1.6; opacity:.9; }
@@ -407,11 +427,15 @@ function findingCard(f) {
   div.className = 'finding ' + f.severity + (f.disposition ? ' disposed' : '');
   const head = document.createElement('div');
   head.className = 'f-head';
+  head.classList.add('viewable');
+  head.title = '查看 Copilot 修复方案';
   head.innerHTML =
     '<span class="f-tag">' + (SEV_LABEL[f.severity] || f.severity) + '</span>' +
     '<span class="f-title"></span>' +
+    '<span class="f-fix-hint">🪄 查看修复方案</span>' +
     '<span class="f-line">第 ' + f.line + ' 行</span>';
   head.querySelector('.f-title').textContent = f.title;
+  head.addEventListener('click', () => vscode.postMessage({ type:'viewFix', id:f.id }));
   const body = document.createElement('div');
   body.className = 'f-body';
   const detail = document.createElement('p');
@@ -445,9 +469,15 @@ function findingCard(f) {
     b.addEventListener('click', () => vscode.postMessage({ type:'dispose', id:f.id, kind:kind }));
     return b;
   }
-  // primary action depends on what's already been done
-  const noDisp = !f.disposition;
-  actions.appendChild(disposeBtn('fixed', '🪄 Copilot 修复', noDisp));
+  // The "fixed" disposition is produced *only* by applying a proposal inside the
+  // fix panel, never by a manual toggle — so this is a pure entry point that
+  // opens the panel for viewing / applying. The undo lives inside the panel.
+  const fixBtn = document.createElement('button');
+  const isFixed = f.disposition === 'fixed';
+  fixBtn.textContent = isFixed ? '🪄 已修复（查看）' : '🪄 Copilot 修复';
+  if (!f.disposition) fixBtn.className = 'primary';
+  fixBtn.addEventListener('click', () => vscode.postMessage({ type:'viewFix', id:f.id }));
+  actions.appendChild(fixBtn);
   actions.appendChild(disposeBtn('commented', '💬 写为评论', false));
   actions.appendChild(disposeBtn('ignored', '🚫 忽略', false));
 

@@ -1,5 +1,6 @@
 import MarkdownIt from 'markdown-it';
 import hljs from 'highlight.js/lib/common';
+import { esc as escapeHtml } from './html';
 
 /** Rendered representation of a review file, ready for the document webview. */
 export interface DocumentRender {
@@ -119,13 +120,6 @@ function highlightToLines(text: string, language: string | undefined): string[] 
     value = escapeHtml(text);
   }
   return splitHighlightedLines(value);
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
 }
 
 /** Renders a file's text into reading HTML (markdown) and highlighted lines. */

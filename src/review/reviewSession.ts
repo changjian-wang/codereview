@@ -334,7 +334,13 @@ export class ReviewSession {
   async persist(): Promise<void> {
     if (this.snapshot) {
       this.snapshot.updatedAt = Date.now();
-      await this.store.save(this.snapshot);
+      try {
+        await this.store.save(this.snapshot);
+      } catch (err) {
+        const message = String((err as Error)?.message ?? err);
+        void vscode.window.showWarningMessage(`Code Review：审查进度保存失败：${message}`);
+        return;
+      }
       this._onDidChange.fire();
     }
   }

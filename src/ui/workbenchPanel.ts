@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import type { FindingSeverity } from '../ai/types';
+import { esc, escAttr, nonce as makeNonce } from './html';
 
 export type FindingDispositionKind = 'fixed' | 'commented' | 'ignored';
 
@@ -87,10 +88,15 @@ type InboundMessage =
  */
 export class WorkbenchPanel {
   private static current?: WorkbenchPanel;
+  /** Folder expand/collapse state, kept static so it survives panel close/reopen. */
+  private static readonly expandedFolders = new Set<string>();
+  private static folderInit = false;
   private readonly panel: vscode.WebviewPanel;
   private readonly disposables: vscode.Disposable[] = [];
-  private readonly expandedFolders = new Set<string>();
-  private folderInit = false;
+  private get expandedFolders(): Set<string> {
+    return WorkbenchPanel.expandedFolders;
+  }
+  private refreshTimer?: ReturnType<typeof setTimeout>;
 
   private constructor(
     panel: vscode.WebviewPanel,
@@ -133,10 +139,34 @@ export class WorkbenchPanel {
 
   /** Re-renders the panel from current session state, if open. */
   static refreshIfOpen(): void {
-    WorkbenchPanel.current?.refresh();
+    WorkbenchPanel.current?.scheduleRefresh();
+  }
+
+  /** Clears persisted folder expand/collapse state so a new review re-initialises it. */
+  static resetFolders(): void {
+    WorkbenchPanel.expandedFolders.clear();
+    WorkbenchPanel.folderInit = false;
+  }
+
+  /**
+   * Coalesces bursts of progress events (e.g. markSeen firing per scroll) into a
+   * single re-render so the webview is not rebuilt dozens of times per second.
+   */
+  private scheduleRefresh(): void {
+    if (this.refreshTimer) {
+      return;
+    }
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = undefined;
+      this.refresh();
+    }, 80);
   }
 
   refresh(): void {
+    if (this.refreshTimer) {
+      clearTimeout(this.refreshTimer);
+      this.refreshTimer = undefined;
+    }
     this.panel.webview.html = this.render(this.getState());
   }
 
@@ -184,7 +214,7 @@ export class WorkbenchPanel {
   }
 
   private render(state: WorkbenchState): string {
-    const nonce = String(Math.random()).slice(2);
+    const nonce = makeNonce();
     const csp = `default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';`;
 
     if (!state.hasReviewSet) {
@@ -197,8 +227,8 @@ export class WorkbenchPanel {
 
     const treeRoot = compactTree(buildTree(state.files));
 
-    if (!this.folderInit && (treeRoot.children?.length ?? 0) > 0) {
-      this.folderInit = true;
+    if (!WorkbenchPanel.folderInit && (treeRoot.children?.length ?? 0) > 0) {
+      WorkbenchPanel.folderInit = true;
       for (const child of treeRoot.children ?? []) {
         if (child.kind === 'folder') {
           this.expandedFolders.add(child.fullPath);
@@ -293,9 +323,9 @@ export class WorkbenchPanel {
   .seen-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
   .seen-dot.none { background:transparent; border:1.5px solid var(--vscode-charts-orange, #d89614); }
   .seen-dot.partial { background:var(--yellow); }
+  .seen-dot.analyzing { background:var(--vscode-charts-blue, #3794ff); }
   .seen-dot.done { background:var(--green); }
-  .tstate { width:14px; text-align:center; color:var(--dim); flex-shrink:0; }
-  .tnode.ready .tstate { color:var(--green); }
+  .tnode.ready .tname { color:var(--green); }
   .tname { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .chg { font-family:var(--vscode-editor-font-family); font-size:.7rem; padding:0 .3rem; border-radius:4px; flex-shrink:0; }
   .chg.add { background:var(--green-bg); color:var(--green); }
@@ -349,7 +379,7 @@ export class WorkbenchPanel {
       <div class="filter-row">
         <input id="filter" type="search" placeholder="过滤文件路径…" autocomplete="off" />
       </div>
-      <div class="tree">${tree || '<div class="empty">无文件</div>'}</div>
+      <div class="tree" id="tree">${tree || '<div class="empty">无文件</div>'}</div>
       <div class="toolbar">
         <div class="grp-label">当前文件</div>
         <div class="row">
@@ -445,8 +475,24 @@ export class WorkbenchPanel {
   document.querySelectorAll('.confirm-btn').forEach((b) => {
     b.addEventListener('click', () => send({ type:'confirm', path:b.dataset.path, id:b.dataset.id }));
   });
-  const active = document.querySelector('.tnode.active');
-  if (active) active.scrollIntoView({ block: 'nearest' });
+  const treeEl = document.getElementById('tree');
+  if (treeEl) {
+    // The tree is fully re-rendered on every progress event (select / markSeen /
+    // toggle). Persist and restore its scroll offset so the view stays exactly
+    // where the user left it — no jumping to the active node or to the bottom.
+    const saved = vscode.getState() || {};
+    if (typeof saved.treeScroll === 'number') treeEl.scrollTop = saved.treeScroll;
+    let raf = 0;
+    treeEl.addEventListener('scroll', () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        const s = vscode.getState() || {};
+        s.treeScroll = treeEl.scrollTop;
+        vscode.setState(s);
+      });
+    }, { passive: true });
+  }
 </script>
 </body>
 </html>`;
@@ -491,6 +537,10 @@ export class WorkbenchPanel {
 
   dispose(): void {
     WorkbenchPanel.current = undefined;
+    if (this.refreshTimer) {
+      clearTimeout(this.refreshTimer);
+      this.refreshTimer = undefined;
+    }
     this.panel.dispose();
     for (const d of this.disposables) {
       d.dispose();
@@ -514,7 +564,25 @@ export class WorkbenchPanel {
     const indent = depth * 12 + 8;
     if (node.kind === 'file' && node.file) {
       const f = node.file;
-      const dotClass = f.fullySeen ? 'done' : f.seen > 0 ? 'partial' : 'none';
+      // A single status dot encodes the file's overall review progress:
+      //   green  = ready (read through + analyzed + every finding dispositioned)
+      //   blue   = fully read, analysis/disposition still pending
+      //   yellow = partially read
+      //   orange = untouched
+      const dotClass = f.ready
+        ? 'done'
+        : f.fullySeen
+          ? 'analyzing'
+          : f.seen > 0
+            ? 'partial'
+            : 'none';
+      const dotTitle = f.ready
+        ? '已就绪'
+        : f.fullySeen
+          ? f.analyzed ? '已读完，发现待确认' : '已读完，待分析'
+          : f.seen > 0
+            ? `已读 ${f.seen}/${f.total} 行`
+            : '未开始';
       const chg = f.change
         ? `<span class="chg ${f.change}">${f.change === 'add' ? '+' : f.change === 'del' ? '−' : '~'}</span>`
         : '';
@@ -524,10 +592,8 @@ export class WorkbenchPanel {
           ? '<span class="ok-flag" title="无发现">✓</span>'
           : '';
       const cov = f.total > 0 ? `${f.seen}/${f.total}` : '—';
-      const stateIcon = f.ready ? '✓' : f.analyzed ? '◑' : '○';
       return `<div class="tnode ${f.active ? 'active' : ''} ${f.ready ? 'ready' : ''}" data-path="${escAttr(f.path)}" style="padding-left:${indent}px">
-        <span class="seen-dot ${dotClass}"></span>
-        <span class="tstate">${stateIcon}</span>
+        <span class="seen-dot ${dotClass}" title="${escAttr(dotTitle)}"></span>
         <span class="tname" title="${escAttr(f.path)}">${esc(f.name)}</span>
         ${chg}
         ${fixFlag}

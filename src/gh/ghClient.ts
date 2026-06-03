@@ -8,13 +8,18 @@ const pexec = promisify(execFile);
 export class GhError extends Error {}
 
 const MAX_BUFFER = 32 * 1024 * 1024;
+/** Hard ceiling so a hung gh process (network stall) can never freeze the UI. */
+const GH_TIMEOUT_MS = 60_000;
 
 async function runGh(args: string[], cwd: string): Promise<string> {
   try {
-    const { stdout } = await pexec('gh', args, { cwd, maxBuffer: MAX_BUFFER });
+    const { stdout } = await pexec('gh', args, { cwd, maxBuffer: MAX_BUFFER, timeout: GH_TIMEOUT_MS });
     return stdout;
   } catch (err) {
-    const e = err as { stderr?: string; message?: string };
+    const e = err as { stderr?: string; message?: string; killed?: boolean; signal?: string };
+    if (e.killed || e.signal === 'SIGTERM') {
+      throw new GhError(`gh ${args[0]} 执行超时（${GH_TIMEOUT_MS / 1000}s）。`);
+    }
     const msg = (e.stderr || e.message || String(err)).trim();
     throw new GhError(msg);
   }

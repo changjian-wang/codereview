@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import type { FixProposal } from '../ai/analyzer';
+import { escAttr as escapeHtml } from './html';
 
 /** Inputs needed to drive the panel. */
 export interface FixProposalRequest {
@@ -92,6 +93,15 @@ export class FixProposalPanel {
     );
     FixProposalPanel.instance = new FixProposalPanel(panel, request);
     void FixProposalPanel.instance.run();
+  }
+
+  /**
+   * Closes the fix-proposal panel if it's open. Called when the reviewer switches
+   * to a different file, since a proposal is scoped to one finding in one file and
+   * is no longer relevant once that file is left.
+   */
+  static closeIfOpen(): void {
+    FixProposalPanel.instance?.panel.dispose();
   }
 
   /**
@@ -650,10 +660,4 @@ function countOccurrences(haystack: string, needle: string): number {
   return n;
 }
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
+
