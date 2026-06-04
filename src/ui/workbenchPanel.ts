@@ -18,6 +18,8 @@ export interface WorkbenchFile {
   findings: number;
   change?: 'add' | 'del' | 'role';
   active: boolean;
+  /** True while an LLM analysis request for this file is in flight. */
+  analyzing: boolean;
 }
 
 /** A finding shown in the inspector for the selected file. */
@@ -79,6 +81,7 @@ interface FilePatch {
   findings: number;
   seen: number;
   total: number;
+  analyzing: boolean;
 }
 
 interface FolderPatch {
@@ -379,9 +382,11 @@ export class WorkbenchPanel {
       }
     }
 
-    const tree = (treeRoot.children ?? [])
-      .map((c) => this.renderNode(c, 0))
-      .join('') || '<div class="empty">无文件</div>';
+    const rows = flattenRows(treeRoot);
+    const expanded = [...this.expandedFolders];
+    const selectedAnalyzing = !!state.files.find(
+      (f) => f.path === state.selected && f.analyzing,
+    );
 
     const gateReason: string[] = [];
     if (state.coverage.filesReady < state.coverage.filesTotal) {
@@ -416,6 +421,7 @@ export class WorkbenchPanel {
     --line:var(--vscode-panel-border);
     --elevated:var(--vscode-editorWidget-background, rgba(127,127,127,.07));
     --dim:var(--vscode-descriptionForeground);
+    --row-h:26px;
   }
   * { box-sizing:border-box; }
   body { margin:0; font-family:var(--vscode-font-family); color:var(--vscode-foreground); font-size:13px; }
@@ -438,21 +444,19 @@ export class WorkbenchPanel {
     color:var(--vscode-input-foreground, inherit); }
   .filter-row input:focus { outline:1px solid var(--vscode-focusBorder); }
 
-  .tree { flex:1; overflow:auto; padding:.35rem .25rem; min-height:0; }
-  .folder-group.collapsed > .children { display:none; }
-  .folder-group.collapsed > .tfolder .caret { transform:rotate(0deg); }
-  .tfolder { display:flex; align-items:center; gap:.4rem; padding:.28rem .45rem;
-    cursor:pointer; border-radius:6px; }
-  .tfolder:hover { background:var(--vscode-list-hoverBackground); }
+  .tree { flex:1; overflow:auto; padding:0; min-height:0; position:relative; }
+  .tree-sizer { position:relative; width:100%; }
+  .trow { position:absolute; left:0; right:0; height:var(--row-h); display:flex;
+    align-items:center; gap:.4rem; padding:0 .45rem; border-radius:6px; cursor:pointer; }
+  .tfolder:hover, .tnode:hover { background:var(--vscode-list-hoverBackground); }
   .tfolder .caret { display:inline-block; width:11px; text-align:center;
-    transition:transform .15s ease; transform:rotate(90deg); color:var(--dim); flex-shrink:0; }
+    transition:transform .15s ease; transform:rotate(0deg); color:var(--dim); flex-shrink:0; }
+  .tfolder.expanded .caret { transform:rotate(90deg); }
   .tfolder .ficon { flex-shrink:0; opacity:.85; }
   .tfolder .tname { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; }
   .tfolder .tcount { font-family:var(--vscode-editor-font-family); font-size:.68rem;
     color:var(--dim); flex-shrink:0; }
 
-  .tnode { display:flex; align-items:center; gap:.45rem; padding:.32rem .45rem; border-radius:6px; cursor:pointer; }
-  .tnode:hover { background:var(--vscode-list-hoverBackground); }
   .tnode.active { background:var(--purple-bg); box-shadow:inset 2px 0 0 var(--purple); }
   .tnode.ready { opacity:.72; }
   .seen-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
@@ -460,6 +464,13 @@ export class WorkbenchPanel {
   .seen-dot.partial { background:var(--yellow); }
   .seen-dot.analyzing { background:var(--vscode-charts-blue, #3794ff); }
   .seen-dot.done { background:var(--green); }
+  .seen-dot.working { background:var(--vscode-charts-blue, #3794ff);
+    box-shadow:0 0 0 0 rgba(55,148,255,.6); animation:dotPulse 1s ease-out infinite; }
+  @keyframes dotPulse {
+    0% { box-shadow:0 0 0 0 rgba(55,148,255,.55); }
+    70% { box-shadow:0 0 0 5px rgba(55,148,255,0); }
+    100% { box-shadow:0 0 0 0 rgba(55,148,255,0); }
+  }
   .tnode.ready .tname { color:var(--green); }
   .tname { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .chg { font-family:var(--vscode-editor-font-family); font-size:.7rem; padding:0 .3rem; border-radius:4px; flex-shrink:0; }
@@ -514,11 +525,11 @@ export class WorkbenchPanel {
       <div class="filter-row">
         <input id="filter" type="search" placeholder="过滤文件路径…" autocomplete="off" />
       </div>
-      <div class="tree" id="tree">${tree || '<div class="empty">无文件</div>'}</div>
+      <div class="tree" id="tree"><div class="tree-sizer" id="treeSizer"></div></div>
       <div class="toolbar">
         <div class="grp-label">当前文件</div>
         <div class="row">
-          <button class="primary" id="analyze" ${state.selected ? '' : 'disabled'}>分析此文件</button>
+          <button class="primary" id="analyze" ${state.selected && !selectedAnalyzing ? '' : 'disabled'}>${selectedAnalyzing ? '分析中…' : '分析此文件'}</button>
           <button id="jumpNext" ${state.selected ? '' : 'disabled'}>跳到下一处未看</button>
         </div>
         <div class="grp-label">整体审查</div>
@@ -551,120 +562,135 @@ export class WorkbenchPanel {
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
   const send = (m) => vscode.postMessage(m);
+  const byId = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
-  const cssEscape = (s) => {
-    if (typeof CSS !== 'undefined' && CSS.escape) return CSS.escape(String(s));
-    return String(s).replace(/(["\\.#:[\](){}+~> ])/g, '\\$1');
-  };
   const formatTime = (ms) => {
     const d = new Date(ms);
     const pad = (n) => String(n).padStart(2, '0');
     return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
   };
-  document.querySelectorAll('.tnode').forEach((n) => {
-    n.addEventListener('click', () => {
-      // Optimistically move the selection highlight immediately so the click
-      // feels instant — the file read/render that follows can be slow for big
-      // files, and we don't want the highlight to wait for it.
-      document.querySelectorAll('.tnode.active').forEach((a) => a.classList.remove('active'));
-      n.classList.add('active');
-      send({ type:'select', path:n.dataset.path });
-    });
-  });
-  document.querySelectorAll('.tfolder').forEach((f) => {
-    f.addEventListener('click', () => {
-      const group = f.parentElement;
-      if (!group) return;
-      const wasCollapsed = group.classList.contains('collapsed');
-      group.classList.toggle('collapsed');
-      group.dataset.serverCollapsed = wasCollapsed ? 'false' : 'true';
-      send({ type:'toggleFolder', path:group.dataset.path });
-    });
-  });
-  const filterInput = document.getElementById('filter');
-  function fileDotClass(f) {
-    return f.ready ? 'done' : (f.fullySeen ? 'analyzing' : (f.seen > 0 ? 'partial' : 'none'));
+
+  // ---- Virtualized file tree -------------------------------------------------
+  // The full row model is shipped once from the host; the webview keeps it in
+  // memory and only ever renders the rows inside the current viewport window.
+  // For a 4800-file review this keeps the live DOM at ~40 nodes instead of
+  // thousands, so first paint and every patch stay cheap.
+  const ROW_H = 26;
+  const OVERSCAN = 8;
+  const ROWS = ${JSON.stringify(rows)};
+  const EXPANDED = new Set(${JSON.stringify(expanded)});
+  const rowByPath = new Map();
+  for (const r of ROWS) rowByPath.set(r.path, r);
+  let selectedPath = ${JSON.stringify(state.selected ?? null)};
+  let visible = [];
+
+  const treeEl = byId('tree');
+  const sizer = byId('treeSizer');
+  const filterInput = byId('filter');
+  const reviewKey = ${JSON.stringify(state.label)};
+
+  function computeVisible() {
+    const q = (filterInput.value || '').trim().toLowerCase();
+    if (q) {
+      const matched = new Set();
+      const ancestors = new Set();
+      for (const r of ROWS) {
+        if (r.kind === 'file' && r.path.toLowerCase().includes(q)) {
+          matched.add(r.path);
+          let p = r.path;
+          while (p.includes('/')) { p = p.slice(0, p.lastIndexOf('/')); ancestors.add(p); }
+        }
+      }
+      visible = ROWS.filter((r) => r.kind === 'file' ? matched.has(r.path) : ancestors.has(r.path));
+    } else {
+      visible = [];
+      let collapsedDepth = -1;
+      for (const r of ROWS) {
+        if (collapsedDepth >= 0 && r.depth > collapsedDepth) continue;
+        collapsedDepth = -1;
+        visible.push(r);
+        if (r.kind === 'folder' && !EXPANDED.has(r.path)) collapsedDepth = r.depth;
+      }
+    }
   }
-  function fileDotTitle(f) {
-    return f.ready
-      ? '已就绪'
-      : (f.fullySeen
-        ? (f.analyzed ? '已读完，发现待确认' : '已读完，待分析')
-        : (f.seen > 0 ? ('已读 ' + f.seen + '/' + f.total + ' 行') : '未开始'));
+
+  function rowHtml(row, i) {
+    const indent = row.depth * 12 + 8;
+    const top = i * ROW_H;
+    if (row.kind === 'folder') {
+      const exp = EXPANDED.has(row.path);
+      return '<div class="trow tfolder' + (exp ? ' expanded' : '') + '" data-kind="folder" data-path="' + esc(row.path) + '" style="top:' + top + 'px; padding-left:' + indent + 'px">'
+        + '<span class="caret">\u25B8</span>'
+        + '<span class="seen-dot ' + row.dotClass + '"></span>'
+        + '<span class="ficon">\uD83D\uDCC1</span>'
+        + '<span class="tname" title="' + esc(row.path) + '">' + esc(row.name) + '</span>'
+        + '<span class="tcount">' + row.readyCount + '/' + row.filesTotal + '</span>'
+        + '</div>';
+    }
+    const chg = row.change
+      ? '<span class="chg ' + row.change + '">' + (row.change === 'add' ? '+' : row.change === 'del' ? '\u2212' : '~') + '</span>'
+      : '';
+    const dotClass = row.analyzing ? 'working' : row.dotClass;
+    const dotTitle = row.analyzing ? '正在分析…' : row.dotTitle;
+    const fix = row.unconfirmed > 0
+      ? '<span class="fix-flag" title="' + row.unconfirmed + ' 个未确认发现">' + row.unconfirmed + '</span>'
+      : (row.analyzed && row.findings === 0 ? '<span class="ok-flag" title="无发现">\u2713</span>' : '');
+    const cov = row.total > 0 ? (row.seen + '/' + row.total) : '\u2014';
+    return '<div class="trow tnode' + (row.active ? ' active' : '') + (row.ready ? ' ready' : '') + '" data-kind="file" data-path="' + esc(row.path) + '" style="top:' + top + 'px; padding-left:' + indent + 'px">'
+      + '<span class="seen-dot ' + dotClass + '" title="' + esc(dotTitle) + '"></span>'
+      + '<span class="tname" title="' + esc(row.path) + '">' + esc(row.name) + '</span>'
+      + chg + fix
+      + '<span class="tcov">' + cov + '</span>'
+      + '</div>';
   }
+
+  function renderWindow() {
+    const total = visible.length;
+    if (total === 0) {
+      sizer.style.height = 'auto';
+      sizer.innerHTML = '<div class="empty">' + (filterInput.value.trim() ? '无匹配文件' : '无文件') + '</div>';
+      return;
+    }
+    sizer.style.height = (total * ROW_H) + 'px';
+    const st = treeEl.scrollTop;
+    const h = treeEl.clientHeight || 0;
+    const start = Math.max(0, Math.floor(st / ROW_H) - OVERSCAN);
+    const end = Math.min(total, Math.ceil((st + h) / ROW_H) + OVERSCAN);
+    let html = '';
+    for (let i = start; i < end; i++) html += rowHtml(visible[i], i);
+    sizer.innerHTML = html;
+  }
+
+  function updateButtons() {
+    const r = selectedPath ? rowByPath.get(selectedPath) : null;
+    const analyzing = !!(r && r.kind === 'file' && r.analyzing);
+    const analyze = byId('analyze');
+    if (analyze) { analyze.disabled = !selectedPath || analyzing; analyze.textContent = analyzing ? '分析中…' : '分析此文件'; }
+    const jumpNext = byId('jumpNext');
+    if (jumpNext) jumpNext.disabled = !selectedPath;
+  }
+
   function renderConclusion(c) {
     if (!c) return '';
-    const target = c.target === 'pr' && c.prNumber
-      ? ('已写回 PR #' + c.prNumber + ' · ')
-      : '本地记录 · ';
+    const target = c.target === 'pr' && c.prNumber ? ('已写回 PR #' + c.prNumber + ' · ') : '本地记录 · ';
     return '<div class="conclusion">已提交结论：<b>' + esc(c.label) + '</b>' +
       '<span class="conc-meta">' + target + esc(formatTime(c.submittedAt)) + '</span></div>';
   }
-  function updateFileNode(p) {
-    const n = document.querySelector('.tnode[data-path="' + cssEscape(p.path) + '"]');
-    if (!n) return;
-    n.classList.toggle('active', !!p.active);
-    n.classList.toggle('ready', !!p.ready);
-    const dot = n.querySelector('.seen-dot');
-    if (dot) {
-      dot.className = 'seen-dot ' + p.dotClass;
-      dot.title = p.dotTitle;
-    }
-    let fix = n.querySelector('.fix-flag, .ok-flag');
-    const cov = n.querySelector('.tcov');
-    if (cov) cov.textContent = p.total > 0 ? (p.seen + '/' + p.total) : '—';
-    if (p.unconfirmed > 0) {
-      if (!fix || !fix.classList.contains('fix-flag')) {
-        fix?.remove();
-        fix = document.createElement('span');
-        fix.className = 'fix-flag';
-        const covEl = n.querySelector('.tcov');
-        covEl ? n.insertBefore(fix, covEl) : n.appendChild(fix);
-      }
-      fix.textContent = String(p.unconfirmed);
-      fix.title = p.unconfirmed + ' 个未确认发现';
-    } else if (p.analyzed && p.findings === 0) {
-      if (!fix || !fix.classList.contains('ok-flag')) {
-        fix?.remove();
-        fix = document.createElement('span');
-        fix.className = 'ok-flag';
-        fix.textContent = '✓';
-        fix.title = '无发现';
-        const covEl = n.querySelector('.tcov');
-        covEl ? n.insertBefore(fix, covEl) : n.appendChild(fix);
-      }
-    } else {
-      fix?.remove();
-    }
-  }
-  function updateFolderNode(p) {
-    const group = document.querySelector('.folder-group[data-path="' + cssEscape(p.path) + '"]');
-    if (!group) return;
-    const dot = group.querySelector('.tfolder .seen-dot');
-    if (dot) dot.className = 'seen-dot ' + p.dotClass;
-    const count = group.querySelector('.tcount');
-    if (count) count.textContent = p.ready + '/' + p.filesTotal;
-  }
+
   function updateHud(msg) {
     const total = msg.coverage.total || 0;
     const pct = total > 0 ? Math.round((msg.coverage.seen / total) * 100) : 0;
-    const covPct = byId('covPct');
-    if (covPct) covPct.textContent = pct + '%';
-    const covFill = byId('covFill');
-    if (covFill) covFill.style.width = pct + '%';
-    const filesReady = byId('filesReady');
-    if (filesReady) filesReady.textContent = msg.coverage.filesReady + '/' + msg.coverage.filesTotal;
-    const gateChip = byId('gateChip');
-    if (gateChip) gateChip.className = 'gate-chip ' + (msg.gatePassed ? 'ok' : 'locked');
-    const gateIcon = byId('gateIcon');
-    if (gateIcon) gateIcon.textContent = msg.gatePassed ? '✓' : '🔒';
-    const gateText = byId('gateText');
-    if (gateText) gateText.textContent = msg.gatePassed ? '门禁已通过，可提交结论' : '门禁未通过';
+    const covPct = byId('covPct'); if (covPct) covPct.textContent = pct + '%';
+    const covFill = byId('covFill'); if (covFill) covFill.style.width = pct + '%';
+    const filesReady = byId('filesReady'); if (filesReady) filesReady.textContent = msg.coverage.filesReady + '/' + msg.coverage.filesTotal;
+    const gateChip = byId('gateChip'); if (gateChip) gateChip.className = 'gate-chip ' + (msg.gatePassed ? 'ok' : 'locked');
+    const gateIcon = byId('gateIcon'); if (gateIcon) gateIcon.textContent = msg.gatePassed ? '✓' : '🔒';
+    const gateText = byId('gateText'); if (gateText) gateText.textContent = msg.gatePassed ? '门禁已通过，可提交结论' : '门禁未通过';
     const gateReason = byId('gateReason');
     if (gateReason) {
       const reasons = [];
@@ -673,114 +699,95 @@ export class WorkbenchPanel {
       gateReason.textContent = reasons.join('；');
       gateReason.style.display = msg.gatePassed ? 'none' : '';
     }
-    const submit = byId('submit');
-    if (submit) submit.disabled = !msg.gatePassed;
-    const showGlobal = byId('showGlobal');
-    if (showGlobal) showGlobal.disabled = !msg.hasGlobalReport;
+    const submit = byId('submit'); if (submit) submit.disabled = !msg.gatePassed;
+    const showGlobal = byId('showGlobal'); if (showGlobal) showGlobal.disabled = !msg.hasGlobalReport;
     const modelLabel = byId('modelLabel');
-    if (modelLabel) {
-      modelLabel.title = msg.modelLabel;
-      modelLabel.innerHTML = '模型：<b>' + esc(msg.modelLabel) + '</b>';
+    if (modelLabel) { modelLabel.title = msg.modelLabel; modelLabel.innerHTML = '模型：<b>' + esc(msg.modelLabel) + '</b>'; }
+    const conclusionWrap = byId('conclusionWrap'); if (conclusionWrap) conclusionWrap.innerHTML = renderConclusion(msg.conclusion);
+  }
+
+  // Event delegation: one listener handles every (virtualized) row.
+  treeEl.addEventListener('click', (e) => {
+    const el = e.target.closest('[data-kind]');
+    if (!el) return;
+    const path = el.dataset.path;
+    if (el.dataset.kind === 'folder') {
+      if (EXPANDED.has(path)) EXPANDED.delete(path); else EXPANDED.add(path);
+      computeVisible();
+      renderWindow();
+      send({ type:'toggleFolder', path });
+    } else {
+      for (const r of ROWS) if (r.kind === 'file') r.active = (r.path === path);
+      selectedPath = path;
+      updateButtons();
+      renderWindow();
+      send({ type:'select', path });
     }
-    const conclusionWrap = byId('conclusionWrap');
-    if (conclusionWrap) conclusionWrap.innerHTML = renderConclusion(msg.conclusion);
-  }
-  function applyFilter() {
-    const q = filterInput.value.trim().toLowerCase();
-    const ancestors = new Set();
-    document.querySelectorAll('.tnode').forEach((r) => {
-      const path = (r.dataset.path || '').toLowerCase();
-      const m = q === '' || path.includes(q);
-      r.style.display = m ? '' : 'none';
-      if (m && q !== '') {
-        let p = r.dataset.path || '';
-        while (p.includes('/')) {
-          p = p.slice(0, p.lastIndexOf('/'));
-          ancestors.add(p);
-        }
-      }
+  });
+
+  let scrollRaf = 0;
+  treeEl.addEventListener('scroll', () => {
+    if (scrollRaf) return;
+    scrollRaf = requestAnimationFrame(() => {
+      scrollRaf = 0;
+      renderWindow();
+      const s = vscode.getState() || {};
+      s.treeScroll = treeEl.scrollTop;
+      vscode.setState(s);
     });
-    document.querySelectorAll('.folder-group').forEach((g) => {
-      const path = g.dataset.path;
-      if (q === '') {
-        g.style.display = '';
-        if (g.dataset.serverCollapsed === 'true') g.classList.add('collapsed');
-        else g.classList.remove('collapsed');
-      } else if (ancestors.has(path)) {
-        g.style.display = '';
-        g.classList.remove('collapsed');
-      } else {
-        g.style.display = 'none';
-      }
-    });
-  }
-  const reviewKey = ${JSON.stringify(state.label)};
-  const savedFilter = vscode.getState() || {};
-  if (savedFilter.filterScope === reviewKey && typeof savedFilter.filter === 'string') {
-    filterInput.value = savedFilter.filter;
-    applyFilter();
-  }
+  }, { passive: true });
+
   filterInput.addEventListener('input', () => {
     const s = vscode.getState() || {};
     s.filterScope = reviewKey;
     s.filter = filterInput.value;
     vscode.setState(s);
-    applyFilter();
+    computeVisible();
+    treeEl.scrollTop = 0;
+    renderWindow();
   });
-  const sel = ${JSON.stringify(state.selected ?? null)};
-  const byId = (id) => document.getElementById(id);
-  byId('analyze')?.addEventListener('click', () => sel && send({ type:'analyze', path:sel }));
+
+  byId('analyze')?.addEventListener('click', () => { if (selectedPath) send({ type:'analyze', path:selectedPath }); });
   byId('jumpNext')?.addEventListener('click', () => send({ type:'jumpNext' }));
   byId('global')?.addEventListener('click', () => send({ type:'global' }));
   byId('showGlobal')?.addEventListener('click', () => send({ type:'showGlobal' }));
   byId('pickModel')?.addEventListener('click', () => send({ type:'pickModel' }));
   byId('pickScope')?.addEventListener('click', () => send({ type:'pickScope' }));
   byId('submit')?.addEventListener('click', () => send({ type:'submit' }));
-  document.querySelectorAll('.locate').forEach((b) => {
-    b.addEventListener('click', () => send({ type:'locate', path:b.dataset.path, line:Number(b.dataset.line) }));
-  });
-  document.querySelectorAll('.confirm-btn').forEach((b) => {
-    b.addEventListener('click', () => send({ type:'confirm', path:b.dataset.path, id:b.dataset.id }));
-  });
-  const treeEl = document.getElementById('tree');
-  if (treeEl) {
-    // The tree is fully re-rendered on every progress event (select / markSeen /
-    // toggle). Persist and restore its scroll offset so the view stays exactly
-    // where the user left it — no jumping to the active node or to the bottom.
-    const saved = vscode.getState() || {};
-    if (typeof saved.treeScroll === 'number') treeEl.scrollTop = saved.treeScroll;
-    let raf = 0;
-    treeEl.addEventListener('scroll', () => {
-      if (raf) return;
-      raf = requestAnimationFrame(() => {
-        raf = 0;
-        const s = vscode.getState() || {};
-        s.treeScroll = treeEl.scrollTop;
-        vscode.setState(s);
-      });
-    }, { passive: true });
-  }
+
   window.addEventListener('message', (e) => {
     const msg = e.data;
     if (!msg || msg.type !== 'patch') return;
-    (msg.files || []).forEach(updateFileNode);
-    (msg.folders || []).forEach(updateFolderNode);
-    if (typeof msg.selected === 'string') {
-      document.querySelectorAll('.tnode.active').forEach((a) => a.classList.remove('active'));
-      const active = document.querySelector('.tnode[data-path="' + cssEscape(msg.selected) + '"]');
-      active?.classList.add('active');
-      const analyze = byId('analyze');
-      if (analyze) analyze.disabled = false;
-      const jumpNext = byId('jumpNext');
-      if (jumpNext) jumpNext.disabled = false;
-    } else {
-      const analyze = byId('analyze');
-      if (analyze) analyze.disabled = true;
-      const jumpNext = byId('jumpNext');
-      if (jumpNext) jumpNext.disabled = true;
-    }
+    (msg.files || []).forEach((p) => {
+      const r = rowByPath.get(p.path);
+      if (!r || r.kind !== 'file') return;
+      r.active = p.active; r.ready = p.ready; r.dotClass = p.dotClass; r.dotTitle = p.dotTitle;
+      r.unconfirmed = p.unconfirmed; r.analyzed = p.analyzed; r.findings = p.findings;
+      r.seen = p.seen; r.total = p.total; r.analyzing = p.analyzing;
+    });
+    (msg.folders || []).forEach((p) => {
+      const r = rowByPath.get(p.path);
+      if (!r || r.kind !== 'folder') return;
+      r.dotClass = p.dotClass; r.readyCount = p.ready; r.filesTotal = p.filesTotal;
+    });
+    selectedPath = (typeof msg.selected === 'string') ? msg.selected : null;
+    updateButtons();
+    renderWindow();
     updateHud(msg);
   });
+
+  // ---- Initial paint ---------------------------------------------------------
+  const savedState = vscode.getState() || {};
+  if (savedState.filterScope === reviewKey && typeof savedState.filter === 'string') {
+    filterInput.value = savedState.filter;
+  }
+  computeVisible();
+  renderWindow();
+  if (typeof savedState.treeScroll === 'number') {
+    treeEl.scrollTop = savedState.treeScroll;
+    renderWindow();
+  }
+  updateButtons();
 </script>
 </body>
 </html>`;
@@ -846,66 +853,6 @@ export class WorkbenchPanel {
       return;
     }
     await vscode.commands.executeCommand('workbench.action.closeSidebar').then(undefined, () => undefined);
-  }
-
-  private renderNode(node: TreeNode, depth: number): string {
-    const indent = depth * 12 + 8;
-    if (node.kind === 'file' && node.file) {
-      const f = node.file;
-      // A single status dot encodes the file's overall review progress:
-      //   green  = ready (read through + analyzed + every finding dispositioned)
-      //   blue   = fully read, analysis/disposition still pending
-      //   yellow = partially read
-      //   orange = untouched
-      const dotClass = f.ready
-        ? 'done'
-        : f.fullySeen
-          ? 'analyzing'
-          : f.seen > 0
-            ? 'partial'
-            : 'none';
-      const dotTitle = f.ready
-        ? '已就绪'
-        : f.fullySeen
-          ? f.analyzed ? '已读完，发现待确认' : '已读完，待分析'
-          : f.seen > 0
-            ? `已读 ${f.seen}/${f.total} 行`
-            : '未开始';
-      const chg = f.change
-        ? `<span class="chg ${f.change}">${f.change === 'add' ? '+' : f.change === 'del' ? '−' : '~'}</span>`
-        : '';
-      const fixFlag = f.unconfirmed > 0
-        ? `<span class="fix-flag" title="${f.unconfirmed} 个未确认发现">${f.unconfirmed}</span>`
-        : f.analyzed && f.findings === 0
-          ? '<span class="ok-flag" title="无发现">✓</span>'
-          : '';
-      const cov = f.total > 0 ? `${f.seen}/${f.total}` : '—';
-      return `<div class="tnode ${f.active ? 'active' : ''} ${f.ready ? 'ready' : ''}" data-path="${escAttr(f.path)}" style="padding-left:${indent}px">
-        <span class="seen-dot ${dotClass}" title="${escAttr(dotTitle)}"></span>
-        <span class="tname" title="${escAttr(f.path)}">${esc(f.name)}</span>
-        ${chg}
-        ${fixFlag}
-        <span class="tcov">${cov}</span>
-      </div>`;
-    }
-    const isExpanded = this.expandedFolders.has(node.fullPath);
-    const stats = node.stats ?? { seen: 0, total: 0, ready: 0, filesTotal: 0, findings: 0, unconfirmed: 0 };
-    const folderDot = stats.filesTotal > 0 && stats.ready === stats.filesTotal
-      ? 'done'
-      : stats.ready > 0 || stats.seen > 0
-        ? 'partial'
-        : 'none';
-    const childrenHtml = (node.children ?? []).map((c) => this.renderNode(c, depth + 1)).join('');
-    return `<div class="folder-group ${isExpanded ? '' : 'collapsed'}" data-path="${escAttr(node.fullPath)}" data-server-collapsed="${isExpanded ? 'false' : 'true'}">
-      <div class="tfolder" style="padding-left:${indent}px">
-        <span class="caret">▸</span>
-        <span class="seen-dot ${folderDot}"></span>
-        <span class="ficon">📁</span>
-        <span class="tname" title="${escAttr(node.fullPath)}">${esc(node.name)}</span>
-        <span class="tcount">${stats.ready}/${stats.filesTotal}</span>
-      </div>
-      <div class="children">${childrenHtml}</div>
-    </div>`;
   }
 }
 
@@ -1010,6 +957,78 @@ function structureSig(files: WorkbenchFile[]): string {
   return files.map((f) => f.path).join('\n');
 }
 
+/** A flat row in the virtualized file tree (pre-order, depth-tagged). */
+interface TreeRow {
+  kind: 'file' | 'folder';
+  path: string;
+  name: string;
+  depth: number;
+  dotClass: 'done' | 'analyzing' | 'partial' | 'none';
+  dotTitle?: string;
+  change?: 'add' | 'del' | 'role';
+  unconfirmed?: number;
+  analyzed?: boolean;
+  findings?: number;
+  seen?: number;
+  total?: number;
+  ready?: boolean;
+  active?: boolean;
+  analyzing?: boolean;
+  readyCount?: number;
+  filesTotal?: number;
+}
+
+/**
+ * Walks the compacted tree in display order, emitting one flat row per node.
+ * The webview keeps this array in memory and only renders the rows currently in
+ * the viewport, so a multi-thousand-file review never materialises its full DOM.
+ */
+function flattenRows(root: TreeNode): TreeRow[] {
+  const out: TreeRow[] = [];
+  const walk = (node: TreeNode, depth: number): void => {
+    for (const child of node.children ?? []) {
+      if (child.kind === 'file' && child.file) {
+        const p = filePatchOf(child.file);
+        out.push({
+          kind: 'file',
+          path: child.file.path,
+          name: child.file.name,
+          depth,
+          dotClass: p.dotClass,
+          dotTitle: p.dotTitle,
+          change: child.file.change,
+          unconfirmed: p.unconfirmed,
+          analyzed: p.analyzed,
+          findings: p.findings,
+          seen: p.seen,
+          total: p.total,
+          ready: p.ready,
+          active: child.file.active,
+          analyzing: p.analyzing,
+        });
+      } else {
+        const stats = child.stats ?? { seen: 0, total: 0, ready: 0, filesTotal: 0, findings: 0, unconfirmed: 0 };
+        out.push({
+          kind: 'folder',
+          path: child.fullPath,
+          name: child.name,
+          depth,
+          dotClass: stats.filesTotal > 0 && stats.ready === stats.filesTotal
+            ? 'done'
+            : stats.ready > 0 || stats.seen > 0
+              ? 'partial'
+              : 'none',
+          readyCount: stats.ready,
+          filesTotal: stats.filesTotal,
+        });
+        walk(child, depth + 1);
+      }
+    }
+  };
+  walk(root, 0);
+  return out;
+}
+
 function snapshotFor(state: WorkbenchState): WorkbenchPatchSnapshot {
   const files = new Map<string, FilePatch>();
   for (const file of state.files) {
@@ -1055,6 +1074,7 @@ function filePatchOf(file: WorkbenchFile): FilePatch {
     findings: file.findings,
     seen: file.seen,
     total: file.total,
+    analyzing: file.analyzing,
   };
 }
 
@@ -1087,7 +1107,8 @@ function sameFilePatch(a: FilePatch, b: FilePatch): boolean {
     && a.analyzed === b.analyzed
     && a.findings === b.findings
     && a.seen === b.seen
-    && a.total === b.total;
+    && a.total === b.total
+    && a.analyzing === b.analyzing;
 }
 
 function sameFolderPatch(a: FolderPatch, b: FolderPatch): boolean {

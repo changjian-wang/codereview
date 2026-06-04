@@ -550,6 +550,7 @@ function buildWorkbenchState(): WorkbenchState {
       findings: findings.length,
       change: changeBadge(f.status, f.additions, f.deletions),
       active: workbenchSelected === f.path,
+      analyzing: analyzingPaths.has(f.path),
     };
   });
 
@@ -1082,6 +1083,7 @@ async function analyzeByPath(rel: string): Promise<void> {
   const reviewSet = session.reviewSet;
   const fileName = rel.split('/').pop() ?? rel;
   analyzingPaths.add(rel);
+  WorkbenchPanel.refreshIfOpen();
   try {
     await runWithProgress(`Code Review：分析 ${rel}`, async (token, report) => {
       try {
@@ -1104,6 +1106,7 @@ async function analyzeByPath(rel: string): Promise<void> {
     });
   } finally {
     analyzingPaths.delete(rel);
+    WorkbenchPanel.refreshIfOpen();
   }
 }
 
