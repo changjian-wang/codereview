@@ -135,6 +135,25 @@ export class WorkbenchPanel {
     return instance;
   }
 
+  /**
+   * Adopts a panel that VS Code restored after a window reload (via the
+   * webview-panel serializer) instead of creating a fresh one. Re-applies the
+   * webview options the restored frame lost, wires handlers, and renders.
+   */
+  static adopt(
+    panel: vscode.WebviewPanel,
+    getState: () => WorkbenchState,
+    actions: WorkbenchActions,
+  ): WorkbenchPanel {
+    WorkbenchPanel.current?.panel.dispose();
+    panel.webview.options = { enableScripts: true };
+    const instance = new WorkbenchPanel(panel, getState, actions);
+    WorkbenchPanel.current = instance;
+    instance.refresh();
+    void instance.applyFocusedMode();
+    return instance;
+  }
+
   static get isOpen(): boolean {
     return !!WorkbenchPanel.current;
   }

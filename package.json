@@ -2,7 +2,7 @@
   "name": "codereview",
   "displayName": "Code Review Gate",
   "description": "Distrust-driven code review: per-line coverage gate plus file-level and cross-file AI analysis, powered by the GitHub CLI and VS Code's Copilot models.",
-  "version": "0.0.25",
+  "version": "0.0.26",
   "publisher": "codereview-dev",
   "private": true,
   "license": "MIT",
@@ -14,32 +14,11 @@
     "Other",
     "SCM Providers"
   ],
+  "activationEvents": [
+    "*"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
-    "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "codereview",
-          "title": "Code Review",
-          "icon": "media/codereview.svg"
-        }
-      ]
-    },
-    "views": {
-      "codereview": [
-        {
-          "id": "codereview.home",
-          "name": "Code Review"
-        }
-      ]
-    },
-    "viewsWelcome": [
-      {
-        "view": "codereview.home",
-        "contents": "请先打开一个工作区。\n\n[打开文件夹…](command:vscode.openFolder)\n\nCode Review 会列出当前 workspace 中的所有项目，点击任一项目即可在独立窗口中开始审查。",
-        "when": "workbenchState == empty"
-      }
-    ],
     "commands": [
       {
         "command": "codereview.startReview",
@@ -100,15 +79,6 @@
         "icon": "$(arrow-down)"
       }
     ],
-    "menus": {
-      "view/item/context": [
-        {
-          "command": "codereview.openInNewWindow",
-          "when": "view == codereview.home && viewItem == codereview.workspaceProject",
-          "group": "inline"
-        }
-      ]
-    },
     "configuration": {
       "title": "Code Review",
       "properties": {

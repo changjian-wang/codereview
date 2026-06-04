@@ -453,7 +453,14 @@ export class FixProposalPanel {
    */
   private async refreshHeader(): Promise<void> {
     const line = await this.computeDisplayLine();
-    this.panel.webview.postMessage({ type: 'header', rel: this.request.rel, line });
+    this.panel.webview.postMessage({
+      type: 'header',
+      rel: this.request.rel,
+      line,
+      title: this.request.finding.title,
+      detail: this.request.finding.detail,
+      suggestion: this.request.finding.suggestion ?? '',
+    });
   }
 
   /** Resolves the line number to show in the header (see {@link refreshHeader}). */
@@ -556,9 +563,9 @@ export class FixProposalPanel {
     <span class="sub" id="subline">${escapeHtml(this.request.rel)} · 第 ${this.request.finding.line} 行</span>
   </header>
   <div class="finding">
-    <div class="title">${escapeHtml(this.request.finding.title)}</div>
-    <div>${escapeHtml(this.request.finding.detail)}</div>
-    ${this.request.finding.suggestion ? `<div class="meta">建议：${escapeHtml(this.request.finding.suggestion)}</div>` : ''}
+    <div class="title" id="f-title">${escapeHtml(this.request.finding.title)}</div>
+    <div id="f-detail">${escapeHtml(this.request.finding.detail)}</div>
+    <div class="meta" id="f-suggest"${this.request.finding.suggestion ? '' : ' style="display:none"'}>${this.request.finding.suggestion ? '建议：' + escapeHtml(this.request.finding.suggestion) : ''}</div>
   </div>
   <div class="toolbar">
     <button id="regenerate" class="primary">重新生成</button>
@@ -644,6 +651,15 @@ export class FixProposalPanel {
       } else if (msg && msg.type === 'header') {
         const el = document.getElementById('subline');
         if (el) el.textContent = msg.rel + ' · 第 ' + msg.line + ' 行';
+        const t = document.getElementById('f-title');
+        if (t) t.textContent = msg.title;
+        const d = document.getElementById('f-detail');
+        if (d) d.textContent = msg.detail;
+        const s = document.getElementById('f-suggest');
+        if (s) {
+          if (msg.suggestion) { s.textContent = '建议：' + msg.suggestion; s.style.display = ''; }
+          else { s.textContent = ''; s.style.display = 'none'; }
+        }
       }
     });
 

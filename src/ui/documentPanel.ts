@@ -350,18 +350,23 @@ export class DocumentPanel {
   .finding.conditional { border-left:3px solid var(--yellow); }
   .finding.suggestion { border-left:3px solid var(--blue); }
   .finding.confirmed { opacity:.55; }
-  .f-head { display:flex; align-items:center; gap:8px; padding:6px 10px; }
+  .f-head { display:flex; align-items:center; gap:8px; padding:6px 10px; cursor:pointer; user-select:none; }
+  .f-head:hover .f-title { text-decoration:underline; text-underline-offset:2px; }
+  .f-caret { flex:none; width:10px; color:var(--dim); font-size:10px; transition:transform .12s; transform:rotate(90deg); }
+  .finding.collapsed .f-caret { transform:rotate(0deg); }
   .f-tag { font-size:11px; padding:1px 7px; border-radius:4px; font-weight:600; flex:none; }
   .finding.bug .f-tag { background:var(--red-bg, rgba(241,76,76,.14)); color:var(--red); }
   .finding.conditional .f-tag { background:rgba(216,192,32,.14); color:var(--yellow); }
   .finding.suggestion .f-tag { background:rgba(86,156,214,.16); color:var(--blue); }
-  .f-title { font-weight:600; flex:1; }
-  .f-head.viewable { cursor:pointer; }
-  .f-head.viewable:hover .f-title { text-decoration:underline; text-underline-offset:2px; }
-  .f-head .f-fix-hint { font-size:11px; color:var(--vscode-descriptionForeground, #999); flex:none; opacity:0; transition:opacity .1s; }
-  .f-head.viewable:hover .f-fix-hint { opacity:1; }
+  .f-title { font-weight:600; flex:none; max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .f-status { font-size:11px; color:var(--green); flex:1; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; display:none; }
+  .finding.collapsed .f-status { display:inline; }
+  .finding.collapsed .f-title { flex:none; }
+  .f-spacer { flex:1; }
+  .finding.collapsed .f-spacer { display:none; }
   .f-line { font-family:var(--vscode-editor-font-family, monospace); font-size:11px; color:var(--blue); flex:none; }
   .f-body { padding:0 10px 8px; }
+  .finding.collapsed .f-body { display:none; }
   .f-detail { margin:0 0 6px; line-height:1.6; opacity:.9; }
   .f-suggest { margin:0 0 8px; color:var(--vscode-textLink-foreground, var(--blue)); line-height:1.6; }
   .f-actions { display:flex; gap:6px; }
@@ -426,17 +431,24 @@ const DISP_LABEL = { fixed:'已 Copilot 修复', commented:'已写为评论', ig
 function findingCard(f) {
   const div = document.createElement('div');
   div.className = 'finding ' + f.severity + (f.disposition ? ' disposed' : '');
+  // Default-collapse anything already dealt with (fixed / commented / ignored)
+  // so resolved findings stop splitting the code; keep open findings expanded.
+  if (f.disposition) div.classList.add('collapsed');
   const head = document.createElement('div');
   head.className = 'f-head';
-  head.classList.add('viewable');
-  head.title = '查看 Copilot 修复方案';
+  head.title = '点击展开 / 收起';
   head.innerHTML =
+    '<span class="f-caret">▾</span>' +
     '<span class="f-tag">' + (SEV_LABEL[f.severity] || f.severity) + '</span>' +
     '<span class="f-title"></span>' +
-    '<span class="f-fix-hint">🪄 查看修复方案</span>' +
+    '<span class="f-status"></span>' +
+    '<span class="f-spacer"></span>' +
     '<span class="f-line">第 ' + f.line + ' 行</span>';
   head.querySelector('.f-title').textContent = f.title;
-  head.addEventListener('click', () => vscode.postMessage({ type:'viewFix', id:f.id }));
+  if (f.disposition) {
+    head.querySelector('.f-status').textContent = '✓ ' + (DISP_LABEL[f.disposition] || f.disposition);
+  }
+  head.addEventListener('click', () => div.classList.toggle('collapsed'));
   const body = document.createElement('div');
   body.className = 'f-body';
   const detail = document.createElement('p');
@@ -511,26 +523,39 @@ function annoCard(a) {
 
 let srcCtx = null;
 
-function buildSourceRow(i, findingsByLine, annosByLine, frag) {
+function buildSourceRow(i, marksByLine, cardsByLine, annosByLine, frag) {
   const lineNo = i + 1;
   const row = document.createElement('div');
   row.className = 'ln' + (seen.has(lineNo) ? ' seen' : '');
   row.dataset.line = String(lineNo);
-  const fs = findingsByLine[lineNo];
-  const fmark = fs ? '<span class="fmark ' + fs[0].severity + '" title="' + fs.map(x=>x.title.replace(/"/g,'')).join(' / ') + '"></span>' : '';
+  const ms = marksByLine[lineNo];
+  const fmark = ms ? '<span class="fmark ' + ms[0].severity + '" title="' + ms.map(x=>x.title.replace(/"/g,'')).join(' / ') + '"></span>' : '';
   row.innerHTML = fmark + '<span class="gutter">' + lineNo + '</span><span class="code">' + (model.sourceLines[i] || '\\u200b') + '</span>';
   frag.appendChild(row);
-  if (fs) { for (const f of fs) frag.appendChild(findingCard(f)); }
+  const cs = cardsByLine[lineNo];
+  if (cs) { for (const f of cs) frag.appendChild(findingCard(f)); }
   if (annosByLine[lineNo]) { for (const a of annosByLine[lineNo]) frag.appendChild(annoCard(a)); }
   return row;
+}
+
+// The card hangs below the *last* line of the (possibly re-anchored) finding
+// range so it never splits the signature from its body; the gutter dot still
+// marks the finding's start line.
+function findingAnchorLine(f) {
+  return (f.endLine && f.endLine >= f.line) ? f.endLine : f.line;
 }
 
 function renderSource() {
   mode = 'source';
   // Cancel any in-flight incremental render from a previous file/mode switch.
   if (srcCtx && srcCtx.raf) cancelAnimationFrame(srcCtx.raf);
-  const findingsByLine = {};
-  for (const f of model.findings) { (findingsByLine[f.line] = findingsByLine[f.line] || []).push(f); }
+  const marksByLine = {};
+  const cardsByLine = {};
+  for (const f of model.findings) {
+    (marksByLine[f.line] = marksByLine[f.line] || []).push(f);
+    const anchor = findingAnchorLine(f);
+    (cardsByLine[anchor] = cardsByLine[anchor] || []).push(f);
+  }
   const annosByLine = {};
   const footAnnos = [];
   for (const a of model.annotations) {
@@ -563,7 +588,7 @@ function renderSource() {
   function appendFoot() {
     if (ctx.footDone) return;
     ctx.footDone = true;
-    const oob = model.findings.filter((f) => f.line < 1 || f.line > total);
+    const oob = model.findings.filter((f) => { const a = findingAnchorLine(f); return a < 1 || a > total; });
     if (footAnnos.length || oob.length) {
       const foot = document.createElement('div');
       foot.className = 'notes-foot';
@@ -584,7 +609,7 @@ function renderSource() {
     const rows = [];
     const stop = Math.min(ctx.i + limit, total);
     for (; ctx.i < stop; ctx.i++) {
-      rows.push(buildSourceRow(ctx.i, findingsByLine, annosByLine, frag));
+      rows.push(buildSourceRow(ctx.i, marksByLine, cardsByLine, annosByLine, frag));
     }
     wrap.appendChild(frag);
     for (const r of rows) io.observe(r);

@@ -79,6 +79,11 @@ const APPLIED_FIXES_MEMENTO_KEY = 'codereview.appliedFixes.v1';
 /** Workspace memento bound in activate(); backs the in-memory appliedFixes map. */
 let appliedFixesMemento: vscode.Memento | undefined;
 
+/** Memento key for the last folder loaded as a review (enables auto-restore after a window reload). */
+const LAST_REVIEW_FOLDER_KEY = 'codereview.lastReviewFolder.v1';
+/** Workspace memento bound in activate(); records the last review folder for restore. */
+let workspaceMemento: vscode.Memento | undefined;
+
 /** Hydrates appliedFixes from workspaceState so revert/locate survive window reloads. */
 function hydrateAppliedFixes(memento: vscode.Memento): void {
   appliedFixesMemento = memento;
@@ -114,9 +119,25 @@ function deleteAppliedFix(key: string): void {
   flushAppliedFixes();
 }
 
-function clearAppliedFixes(): void {
+/**
+ * Re-syncs the in-memory applied-fix map from persisted storage. Used when
+ * (re)loading a review so previously applied Copilot fixes survive a reload —
+ * this does NOT erase the saved snapshots, which is what kept 「定位」/inline
+ * cards following the fix content after a reload.
+ */
+function rehydrateAppliedFixes(): void {
   appliedFixes.clear();
-  flushAppliedFixes();
+  if (!appliedFixesMemento) {
+    return;
+  }
+  const stored = appliedFixesMemento.get<Record<string, { oldText: string; newText: string }>>(
+    APPLIED_FIXES_MEMENTO_KEY,
+  );
+  if (stored) {
+    for (const [key, edit] of Object.entries(stored)) {
+      appliedFixes.set(key, edit);
+    }
+  }
 }
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -135,17 +156,15 @@ export function activate(context: vscode.ExtensionContext): void {
   // Restore applied-fix snapshots so 「撤销修复」 and the fix-aware 「定位」
   // keep working after a window reload (they rely on the saved newText).
   hydrateAppliedFixes(context.workspaceState);
+  workspaceMemento = context.workspaceState;
 
   // Older versions hid the activity bar globally and didn't always restore it.
   // If the global setting is still `hidden`, reset it once so the user gets
   // the activity bar back without having to fix it manually.
   void restoreGloballyHiddenActivityBar(context);
 
-  const homeProvider = new WorkspaceProjectsProvider();
   context.subscriptions.push(
     session,
-    vscode.window.registerTreeDataProvider('codereview.home', homeProvider),
-    vscode.workspace.onDidChangeWorkspaceFolders(() => homeProvider.refresh()),
     vscode.commands.registerCommand('codereview.startReview', startReview),
     vscode.commands.registerCommand('codereview.openOrStart', openOrStartReview),
     vscode.commands.registerCommand('codereview.openInNewWindow', openInNewWindow),
@@ -163,48 +182,90 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Keep the workbench webview in sync with session progress.
   context.subscriptions.push(session.onDidChange(() => WorkbenchPanel.refreshIfOpen()));
+
+  // Restore the workbench panel after a window reload: if VS Code kept the
+  // popped-out review panel, this serializer hands it back. We reload the last
+  // review folder so the panel has live data, then re-attach it — no need for
+  // the user to click 「Open in Code Review」 again.
+  context.subscriptions.push(
+    vscode.window.registerWebviewPanelSerializer('codereview.workbench', {
+      deserializeWebviewPanel: async (panel) => {
+        await restoreWorkbenchInto(panel);
+      },
+    }),
+  );
+
+  // The document viewer is reconstructed on demand (when the user picks a file),
+  // so a restored-but-empty frame would be misleading. Dispose it; the workbench
+  // restore above brings back the review and the user reopens a file from there.
+  context.subscriptions.push(
+    vscode.window.registerWebviewPanelSerializer('codereview.document', {
+      deserializeWebviewPanel: async (panel) => {
+        panel.dispose();
+      },
+    }),
+    vscode.window.registerWebviewPanelSerializer('codereview.fixProposal', {
+      deserializeWebviewPanel: async (panel) => {
+        panel.dispose();
+      },
+    }),
+    vscode.window.registerWebviewPanelSerializer('codereview.globalReport', {
+      deserializeWebviewPanel: async (panel) => {
+        panel.dispose();
+      },
+    }),
+  );
+
+  // Activation setup is done; swap the status bar spinner for the real icon so
+  // users only click once it can actually open the workbench.
+  markStatusBarReady();
 }
+
+/** Status bar button; starts as a spinner during activation, then the real icon. */
+let statusBarItem: vscode.StatusBarItem | undefined;
 
 /** Adds a persistent status bar button that opens the workbench or starts a new review. */
 function createStatusBarEntry(): vscode.StatusBarItem {
   const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   item.name = 'Code Review';
-  item.text = '$(checklist) Open in Code Review';
-  item.tooltip = 'Code Review：在独立窗口中打开审查工作台（可在窗口内选择审查范围）';
+  // Show a spinner until activation finishes; clicking before then would be a
+  // no-op and confuse the user, so we signal "loading" explicitly.
+  item.text = '$(loading~spin) Code Review 加载中…';
+  item.tooltip = 'Code Review 正在加载，请稍候…';
   item.command = 'codereview.openInNewWindow';
   item.show();
+  statusBarItem = item;
   return item;
 }
 
-/**
- * Lists every workspace folder as a clickable item in the activity-bar view.
- * Clicking a folder opens Code Review for that project in a new window
- * (mirrors VS Code's "Open in Agents Window" entry point).
- */
-class WorkspaceProjectsProvider implements vscode.TreeDataProvider<vscode.WorkspaceFolder> {
-  private readonly _onDidChangeTreeData = new vscode.EventEmitter<void>();
-  readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
-
-  refresh(): void {
-    this._onDidChangeTreeData.fire();
+/** Swaps the status bar entry from its loading spinner to the ready state. */
+function markStatusBarReady(): void {
+  if (!statusBarItem) {
+    return;
   }
+  statusBarReady = true;
+  setStatusBarBusy(false);
+}
 
-  getTreeItem(folder: vscode.WorkspaceFolder): vscode.TreeItem {
-    const item = new vscode.TreeItem(folder.name, vscode.TreeItemCollapsibleState.None);
-    item.description = folder.uri.fsPath;
-    item.tooltip = `以 Code Review 打开：${folder.uri.fsPath}`;
-    item.iconPath = new vscode.ThemeIcon('folder');
-    item.contextValue = 'codereview.workspaceProject';
-    item.command = {
-      command: 'codereview.openInNewWindow',
-      title: 'Open in Code Review',
-      arguments: [folder.uri.fsPath],
-    };
-    return item;
+/** Tracks whether activation finished, so busy toggles don't override "加载中". */
+let statusBarReady = false;
+
+/** Toggles the status bar button between its spinner and ready icon. */
+function setStatusBarBusy(busy: boolean): void {
+  if (!statusBarItem) {
+    return;
   }
-
-  getChildren(): vscode.WorkspaceFolder[] {
-    return [...(vscode.workspace.workspaceFolders ?? [])];
+  if (!statusBarReady) {
+    statusBarItem.text = '$(loading~spin) Code Review 加载中…';
+    statusBarItem.tooltip = 'Code Review 正在加载，请稍候…';
+    return;
+  }
+  if (busy) {
+    statusBarItem.text = '$(loading~spin) 正在打开 Code Review…';
+    statusBarItem.tooltip = 'Code Review 正在打开审查工作台，请稍候…';
+  } else {
+    statusBarItem.text = '$(checklist) Open in Code Review';
+    statusBarItem.tooltip = 'Code Review：在独立窗口中打开审查工作台（可在窗口内选择审查范围）';
   }
 }
 
@@ -260,13 +321,18 @@ async function openInNewWindow(
   // Auto-load the chosen project as the initial review set (whole folder, skipping
   // node_modules / dist / bin / obj / ...). The user can still narrow down later
   // via the 「切换范围…」 button inside the workbench.
-  await loadFolderAsReview(chosenCwd);
-  // Open the workbench straight into its own auxiliary window. The webview API
-  // can only create a panel in the current window, so we relocate it with
-  // `moveEditorToNewWindow` — but we fire that the instant the panel exists,
-  // before opening any file or applying the split layout, so the user never
-  // sees the intermediate "tab in the current window" step.
-  await openWorkbench({ moveToNewWindow: true });
+  setStatusBarBusy(true);
+  try {
+    await loadFolderAsReview(chosenCwd);
+    // Open the workbench straight into its own auxiliary window. The webview API
+    // can only create a panel in the current window, so we relocate it with
+    // `moveEditorToNewWindow` — but we fire that the instant the panel exists,
+    // before opening any file or applying the split layout, so the user never
+    // sees the intermediate "tab in the current window" step.
+    await openWorkbench({ moveToNewWindow: true });
+  } finally {
+    setStatusBarBusy(false);
+  }
 }
 
 /** Loads the entire folder at `cwd` as the current review set. */
@@ -288,9 +354,11 @@ async function loadFolderAsReview(cwd: string): Promise<void> {
         closeScopeBoundPanels();
         workbenchSelected = undefined;
         docRenderCache.clear();
-        clearAppliedFixes();
+        rehydrateAppliedFixes();
         WorkbenchPanel.resetFolders();
         layoutAppliedForCurrentReview = false;
+        // Remember this folder so a window reload can auto-restore the review.
+        void workspaceMemento?.update(LAST_REVIEW_FOLDER_KEY, rootCwd);
         void vscode.commands.executeCommand('setContext', 'codereview.active', true);
         transientInfo(`已加载 ${reviewSet.label} · ${reviewSet.files.length} 个文件`);
       } catch (err) {
@@ -330,7 +398,7 @@ async function startReview(): Promise<void> {
         closeScopeBoundPanels();
         workbenchSelected = undefined;
         docRenderCache.clear();
-        clearAppliedFixes();
+        rehydrateAppliedFixes();
         WorkbenchPanel.resetFolders();
         layoutAppliedForCurrentReview = false;
         void vscode.commands.executeCommand('setContext', 'codereview.active', true);
@@ -355,18 +423,7 @@ async function selectModel(): Promise<void> {
 
 /** Opens (or reveals) the Review Workbench webview. */
 async function openWorkbench(opts: { moveToNewWindow?: boolean } = {}): Promise<void> {
-  WorkbenchPanel.show(buildWorkbenchState, {
-    open: (path) => void openFileInPanel(path),
-    analyze: (path) => void analyzeByPath(path),
-    disposeFinding: (path, id, kind) => void disposeFinding(path, id, kind),
-    locate: (path, line) => void locateInFile(path, line),
-    jumpNext: jumpToNextUnseenCurrent,
-    globalAnalysis: () => void runGlobalAnalysis(),
-    showGlobal: showGlobalReport,
-    submit: () => void submitConclusion(),
-    pickModel: () => void selectModel(),
-    pickScope: () => void startReview(),
-  });
+  WorkbenchPanel.show(buildWorkbenchState, workbenchActions());
   // Relocate to a dedicated window immediately — before any file open or layout
   // work — so the panel appears to open directly in its own window rather than
   // flashing as a tab in the current one first.
@@ -386,6 +443,50 @@ async function openWorkbench(opts: { moveToNewWindow?: boolean } = {}): Promise<
   if (session.reviewSet && !layoutAppliedForCurrentReview) {
     layoutAppliedForCurrentReview = true;
     await applyWorkbenchLayout();
+  }
+}
+
+/** Builds the action callbacks the workbench webview dispatches to. */
+function workbenchActions(): import('./ui/workbenchPanel').WorkbenchActions {
+  return {
+    open: (path) => void openFileInPanel(path),
+    analyze: (path) => void analyzeByPath(path),
+    disposeFinding: (path, id, kind) => void disposeFinding(path, id, kind),
+    locate: (path, line) => void locateInFile(path, line),
+    jumpNext: jumpToNextUnseenCurrent,
+    globalAnalysis: () => void runGlobalAnalysis(),
+    showGlobal: showGlobalReport,
+    submit: () => void submitConclusion(),
+    pickModel: () => void selectModel(),
+    pickScope: () => void startReview(),
+  };
+}
+
+/**
+ * Re-attaches a workbench panel that VS Code restored after a window reload.
+ * Reloads the last review folder (so the panel has live session data) and adopts
+ * the restored panel. Falls back to disposing the panel when no prior review is
+ * recorded, so the user is not left staring at an empty restored frame.
+ */
+async function restoreWorkbenchInto(panel: vscode.WebviewPanel): Promise<void> {
+  const cwd = workspaceMemento?.get<string>(LAST_REVIEW_FOLDER_KEY);
+  if (!cwd) {
+    panel.dispose();
+    return;
+  }
+  setStatusBarBusy(true);
+  try {
+    if (!session.reviewSet) {
+      await loadFolderAsReview(cwd);
+    }
+    if (!session.reviewSet) {
+      panel.dispose();
+      return;
+    }
+    WorkbenchPanel.adopt(panel, buildWorkbenchState, workbenchActions());
+    void vscode.commands.executeCommand('setContext', 'codereview.active', true);
+  } finally {
+    setStatusBarBusy(false);
   }
 }
 
@@ -514,7 +615,11 @@ async function openFileInPanel(relPath: string): Promise<void> {
     return; // rendering may have yielded; bail before overwriting the panel.
   }
   session.setTotalLines(relPath, render.totalLines);
-  DocumentPanel.show(buildDocModel(relPath, render), docActions());
+  const anchors = await computeFindingAnchors(relPath);
+  if (myGeneration !== openFileGeneration) {
+    return; // anchoring may have yielded; bail before overwriting the panel.
+  }
+  DocumentPanel.show(buildDocModel(relPath, render, anchors), docActions());
   WorkbenchPanel.refreshIfOpen();
 }
 
@@ -545,7 +650,11 @@ function languageIdFor(relPath: string): string {
 }
 
 /** Builds the serializable model the document webview renders. */
-function buildDocModel(relPath: string, render: DocumentRender): DocModel {
+function buildDocModel(
+  relPath: string,
+  render: DocumentRender,
+  anchors?: Map<string, { line: number; endLine: number }>,
+): DocModel {
   const state = session.fileState(relPath);
   const rawLines = deHighlight(render.sourceLines);
   return {
@@ -560,13 +669,15 @@ function buildDocModel(relPath: string, render: DocumentRender): DocModel {
       const d = session.findingDisposition(relPath, f.id);
       // If a Copilot fix was applied, the finding's snapshot line is stale — the
       // edit shifted the file. Re-anchor the inline card to the fix's current
-      // content (its last line), so the card follows the modified code instead
-      // of staying pinned to the old line number.
-      const anchored = reanchorLinesSync(relPath, f.id, rawLines);
+      // content (start + last line), so the card follows the modified code
+      // instead of staying pinned to the old line number. `anchors` is computed
+      // from the live document (same source as the locate action), so card and
+      // locate always agree.
+      const a = anchors?.get(f.id);
       return {
         id: f.id,
-        line: anchored?.line ?? f.line,
-        endLine: anchored?.endLine ?? f.endLine,
+        line: a?.line ?? f.line,
+        endLine: a?.endLine ?? f.endLine,
         severity: f.severity,
         title: f.title,
         detail: f.detail,
@@ -587,33 +698,86 @@ function buildDocModel(relPath: string, render: DocumentRender): DocModel {
 }
 
 /**
- * Synchronous re-anchor used while building the doc model: locates an applied
- * fix's `newText` within the already-rendered (post-edit) source lines and
- * returns its 1-based start line and **last** line. Returns undefined when no
- * fix is applied or the snippet can't be found. Mirrors {@link reanchorToAppliedFix}
- * but works off in-memory lines instead of re-opening the document.
+ * Computes live-document anchors for every finding that has an applied Copilot
+ * fix. Reads the file text once and locates each fix's `newText`, returning a
+ * map of findingId → 1-based start/last line. Findings without an applied fix
+ * (or whose snippet can no longer be found) are omitted, so callers fall back to
+ * the stored snapshot lines. This mirrors {@link reanchorToAppliedFix} but
+ * batches a whole file in a single read.
  */
-function reanchorLinesSync(
-  rel: string,
-  findingId: string,
-  rawLines: string[],
+async function computeFindingAnchors(
+  relPath: string,
+): Promise<Map<string, { line: number; endLine: number }>> {
+  const anchors = new Map<string, { line: number; endLine: number }>();
+  const findings = session.findings(relPath);
+  const pending = findings.filter((f) => appliedFixes.has(fixKey(relPath, f.id)));
+  if (pending.length === 0) {
+    return anchors;
+  }
+  const cwd = activeCwd();
+  if (!cwd) {
+    return anchors;
+  }
+  try {
+    const fileUri = vscode.Uri.joinPath(vscode.Uri.file(cwd), relPath);
+    const doc = await vscode.workspace.openTextDocument(fileUri);
+    const docLines = doc.getText().split(/\r?\n/);
+    for (const f of pending) {
+      const edit = appliedFixes.get(fixKey(relPath, f.id));
+      if (!edit) {
+        continue;
+      }
+      const hit = locateSnippetLines(docLines, edit.newText);
+      if (hit) {
+        anchors.set(f.id, hit);
+      }
+    }
+  } catch (err) {
+    console.warn('[codereview] computeFindingAnchors failed:', err);
+  }
+  return anchors;
+}
+
+/**
+ * Locates a multi-line snippet inside a document by *line* content, returning
+ * its 1-based start and last line. Matching is EOL- and trailing-whitespace
+ * insensitive (each line is `trimEnd`-compared), which is essential because
+ * `applyEdit` inserts the proposal's `\n`-terminated text but a subsequent
+ * `save()` may normalise the file to CRLF — making a raw `indexOf(newText)`
+ * fail forever. Leading/trailing blank lines in the snippet are ignored so the
+ * anchor lands on real content. Returns undefined when no unambiguous match
+ * exists.
+ */
+function locateSnippetLines(
+  docLines: string[],
+  snippet: string,
 ): { line: number; endLine: number } | undefined {
-  const edit = appliedFixes.get(fixKey(rel, findingId));
-  if (!edit) {
+  const needle = snippet
+    .split(/\r?\n/)
+    .map((l) => l.replace(/\s+$/, ''))
+    .filter((l, i, arr) => {
+      // drop leading/trailing blank lines but keep interior ones
+      const before = arr.slice(0, i).every((x) => x === '');
+      const after = arr.slice(i + 1).every((x) => x === '');
+      return !(l === '' && (before || after));
+    });
+  if (needle.length === 0) {
     return undefined;
   }
-  const joined = rawLines.join('\n');
-  const idx = joined.indexOf(edit.newText);
-  if (idx < 0) {
-    return undefined;
+  const hay = docLines.map((l) => l.replace(/\s+$/, ''));
+  for (let i = 0; i + needle.length <= hay.length; i++) {
+    let ok = true;
+    for (let j = 0; j < needle.length; j++) {
+      if (hay[i + j] !== needle[j]) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) {
+      return { line: i + 1, endLine: i + needle.length };
+    }
   }
-  const line = joined.slice(0, idx).split('\n').length;
-  let endLine = joined.slice(0, idx + edit.newText.length).split('\n').length;
-  // A trailing newline in newText counts one extra line; step back to the真末行.
-  if (edit.newText.endsWith('\n') && endLine > line) {
-    endLine -= 1;
-  }
-  return { line, endLine };
+  return undefined;
 }
 
 /** Recovers raw source lines by stripping highlight markup. */
@@ -630,10 +794,14 @@ function deHighlight(lines: string[]): string[] {
 }
 
 /** Pushes an updated model into the document panel if it shows this file. */
-function refreshDocPanel(relPath: string): void {
+async function refreshDocPanel(relPath: string): Promise<void> {
   const render = docRenderCache.get(relPath);
   if (render && DocumentPanel.currentPath === relPath) {
-    DocumentPanel.update(buildDocModel(relPath, render));
+    const anchors = await computeFindingAnchors(relPath);
+    if (DocumentPanel.currentPath !== relPath) {
+      return;
+    }
+    DocumentPanel.update(buildDocModel(relPath, render, anchors));
   }
 }
 
@@ -655,7 +823,11 @@ async function reloadDocPanel(relPath: string): Promise<void> {
   const text = await readReviewFileText(relPath);
   const render = renderFor(relPath, text);
   session.setTotalLines(relPath, render.totalLines);
-  DocumentPanel.update(buildDocModel(relPath, render));
+  const anchors = await computeFindingAnchors(relPath);
+  if (DocumentPanel.currentPath !== relPath) {
+    return;
+  }
+  DocumentPanel.update(buildDocModel(relPath, render, anchors));
 }
 
 /**
@@ -1384,14 +1556,11 @@ async function reanchorToAppliedFix(
   try {
     const fileUri = vscode.Uri.joinPath(vscode.Uri.file(cwd), rel);
     const doc = await vscode.workspace.openTextDocument(fileUri);
-    const text = doc.getText();
-    const idx = text.indexOf(edit.newText);
-    if (idx < 0) {
+    const hit = locateSnippetLines(doc.getText().split(/\r?\n/), edit.newText);
+    if (!hit) {
       return undefined;
     }
-    const start = doc.positionAt(idx);
-    const end = doc.positionAt(idx + edit.newText.length);
-    return { startLine: start.line + 1, endLine: end.line + 1 };
+    return { startLine: hit.line, endLine: hit.endLine };
   } catch (err) {
     console.warn('[codereview] reanchorToAppliedFix failed:', err);
     return undefined;
