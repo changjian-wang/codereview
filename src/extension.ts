@@ -261,11 +261,12 @@ async function openInNewWindow(
   // node_modules / dist / bin / obj / ...). The user can still narrow down later
   // via the 「切换范围…」 button inside the workbench.
   await loadFolderAsReview(chosenCwd);
-  // Open the workbench directly in the current window. We deliberately do NOT
-  // pop it into a separate window or touch the parent layout (the side bar /
-  // Explorer stays as the user left it) — opening should feel instantaneous,
-  // not "tab first, then detach".
-  await openWorkbench();
+  // Open the workbench straight into its own auxiliary window. The webview API
+  // can only create a panel in the current window, so we relocate it with
+  // `moveEditorToNewWindow` — but we fire that the instant the panel exists,
+  // before opening any file or applying the split layout, so the user never
+  // sees the intermediate "tab in the current window" step.
+  await openWorkbench({ moveToNewWindow: true });
 }
 
 /** Loads the entire folder at `cwd` as the current review set. */
@@ -353,7 +354,7 @@ async function selectModel(): Promise<void> {
 }
 
 /** Opens (or reveals) the Review Workbench webview. */
-async function openWorkbench(): Promise<void> {
+async function openWorkbench(opts: { moveToNewWindow?: boolean } = {}): Promise<void> {
   WorkbenchPanel.show(buildWorkbenchState, {
     open: (path) => void openFileInPanel(path),
     analyze: (path) => void analyzeByPath(path),
@@ -366,6 +367,19 @@ async function openWorkbench(): Promise<void> {
     pickModel: () => void selectModel(),
     pickScope: () => void startReview(),
   });
+  // Relocate to a dedicated window immediately — before any file open or layout
+  // work — so the panel appears to open directly in its own window rather than
+  // flashing as a tab in the current one first.
+  if (opts.moveToNewWindow) {
+    try {
+      await vscode.commands.executeCommand('workbench.action.moveEditorToNewWindow');
+    } catch (err) {
+      console.warn('[codereview] moveEditorToNewWindow failed:', err);
+    }
+    // A stale document panel in the previous window would otherwise steal the
+    // Beside column; drop it so the next file opens beside the relocated panel.
+    DocumentPanel.closeIfOpen();
+  }
   // Intentionally do NOT open the first review file — leave the document column
   // blank so the user picks what to review. We still apply the split layout so
   // the empty editor group is visible beside the workbench.
@@ -533,20 +547,26 @@ function languageIdFor(relPath: string): string {
 /** Builds the serializable model the document webview renders. */
 function buildDocModel(relPath: string, render: DocumentRender): DocModel {
   const state = session.fileState(relPath);
+  const rawLines = deHighlight(render.sourceLines);
   return {
     path: relPath,
     name: relPath.split('/').pop() ?? relPath,
     isMarkdown: render.isMarkdown,
     readingHtml: render.readingHtml,
     sourceLines: render.sourceLines,
-    raw: deHighlight(render.sourceLines),
+    raw: rawLines,
     seen: state?.seenLines ?? [],
     findings: session.findings(relPath).map((f) => {
       const d = session.findingDisposition(relPath, f.id);
+      // If a Copilot fix was applied, the finding's snapshot line is stale — the
+      // edit shifted the file. Re-anchor the inline card to the fix's current
+      // content (its last line), so the card follows the modified code instead
+      // of staying pinned to the old line number.
+      const anchored = reanchorLinesSync(relPath, f.id, rawLines);
       return {
         id: f.id,
-        line: f.line,
-        endLine: f.endLine,
+        line: anchored?.line ?? f.line,
+        endLine: anchored?.endLine ?? f.endLine,
         severity: f.severity,
         title: f.title,
         detail: f.detail,
@@ -564,6 +584,36 @@ function buildDocModel(relPath: string, render: DocumentRender): DocModel {
       content: a.content,
     })),
   };
+}
+
+/**
+ * Synchronous re-anchor used while building the doc model: locates an applied
+ * fix's `newText` within the already-rendered (post-edit) source lines and
+ * returns its 1-based start line and **last** line. Returns undefined when no
+ * fix is applied or the snippet can't be found. Mirrors {@link reanchorToAppliedFix}
+ * but works off in-memory lines instead of re-opening the document.
+ */
+function reanchorLinesSync(
+  rel: string,
+  findingId: string,
+  rawLines: string[],
+): { line: number; endLine: number } | undefined {
+  const edit = appliedFixes.get(fixKey(rel, findingId));
+  if (!edit) {
+    return undefined;
+  }
+  const joined = rawLines.join('\n');
+  const idx = joined.indexOf(edit.newText);
+  if (idx < 0) {
+    return undefined;
+  }
+  const line = joined.slice(0, idx).split('\n').length;
+  let endLine = joined.slice(0, idx + edit.newText.length).split('\n').length;
+  // A trailing newline in newText counts one extra line; step back to the真末行.
+  if (edit.newText.endsWith('\n') && endLine > line) {
+    endLine -= 1;
+  }
+  return { line, endLine };
 }
 
 /** Recovers raw source lines by stripping highlight markup. */

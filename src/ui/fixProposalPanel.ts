@@ -442,6 +442,48 @@ export class FixProposalPanel {
   private setState(state: PanelState): void {
     this.state = state;
     this.panel.webview.postMessage({ type: 'state', state });
+    // Keep the header's line label in sync with the (possibly fix-shifted) content.
+    void this.refreshHeader();
+  }
+
+  /**
+   * Updates the header's `rel · 第 N 行` label. When a proposal has been applied,
+   * N follows the live content by anchoring to the **last line** of the applied
+   * snippet; otherwise it falls back to the finding's original line.
+   */
+  private async refreshHeader(): Promise<void> {
+    const line = await this.computeDisplayLine();
+    this.panel.webview.postMessage({ type: 'header', rel: this.request.rel, line });
+  }
+
+  /** Resolves the line number to show in the header (see {@link refreshHeader}). */
+  private async computeDisplayLine(): Promise<number> {
+    const fallback = this.request.finding.line;
+    if (this.state.kind !== 'ready') {
+      return fallback;
+    }
+    const applied = this.state.proposals.find((p) => p.applied);
+    if (!applied) {
+      return fallback;
+    }
+    try {
+      const doc = await vscode.workspace.openTextDocument(this.request.fileUri);
+      const text = doc.getText();
+      const idx = text.indexOf(applied.newText);
+      if (idx < 0) {
+        return fallback;
+      }
+      // Anchor to the last line of the applied content. positionAt points just
+      // past the snippet; if it ends with a newline, step back to the real末行.
+      const end = doc.positionAt(idx + applied.newText.length);
+      let zeroBased = end.line;
+      if (end.character === 0 && zeroBased > 0) {
+        zeroBased -= 1;
+      }
+      return zeroBased + 1;
+    } catch {
+      return fallback;
+    }
   }
 
   private cancelGeneration(): void {
@@ -511,7 +553,7 @@ export class FixProposalPanel {
 <body>
   <header>
     <h2>修复方案</h2>
-    <span class="sub">${escapeHtml(this.request.rel)} · 第 ${this.request.finding.line} 行</span>
+    <span class="sub" id="subline">${escapeHtml(this.request.rel)} · 第 ${this.request.finding.line} 行</span>
   </header>
   <div class="finding">
     <div class="title">${escapeHtml(this.request.finding.title)}</div>
@@ -599,6 +641,9 @@ export class FixProposalPanel {
       const msg = e.data;
       if (msg && msg.type === 'state') {
         render(msg.state);
+      } else if (msg && msg.type === 'header') {
+        const el = document.getElementById('subline');
+        if (el) el.textContent = msg.rel + ' · 第 ' + msg.line + ' 行';
       }
     });
 
