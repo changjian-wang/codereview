@@ -599,6 +599,9 @@ export class FixProposalPanel {
         const banner = state.lastApplied
           ? '<div class="status applied">已应用：<strong>' + esc(state.lastApplied) + '</strong>。改动已同步到左侧文件查看器；点击「撤销修改」可还原。</div>'
           : '';
+        const altNote = (state.proposals.length > 1 && !state.lastApplied)
+          ? '<div class="hint">以下是互斥的备选方案，任选其一应用即可修复，不需要全部应用。</div>'
+          : '';
         const cards = state.proposals.map((p, i) => {
           let badge;
           if (p.applied) {
@@ -630,7 +633,7 @@ export class FixProposalPanel {
             '</div>',
           ].join('');
         }).join('');
-        body.innerHTML = banner + cards;
+        body.innerHTML = banner + altNote + cards;
         body.querySelectorAll('button[data-apply]').forEach((b) => {
           b.addEventListener('click', () => {
             vscode.postMessage({ type: 'apply', idx: Number(b.getAttribute('data-apply')) });
