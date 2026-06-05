@@ -315,10 +315,43 @@ export class FixProposalPanel {
     if (!this.hasNotifiedApplied) {
       this.hasNotifiedApplied = true;
     }
-    // Anchor downstream locate/revert to the proposal's first edit.
-    this.request.onApplied({ oldText: proposal.edits[0].oldText, newText: proposal.edits[0].newText });
+    // Anchor downstream locate/revert to the edit nearest the finding — not
+    // blindly edits[0], which for a multi-segment fix is usually a top-of-file
+    // `using`/import far from the actual problem. This keeps post-apply focus on
+    // the code the finding is about.
+    const anchorEdit = this.anchorEditFor(proposal.edits, content);
+    this.request.onApplied({ oldText: anchorEdit.oldText, newText: anchorEdit.newText });
     this.request.onFileChanged?.();
     vscode.window.setStatusBarMessage(`已应用：${proposal.title}（点击「撤销修改」可还原）`, 8000);
+  }
+
+  /**
+   * Picks which edit of a (possibly multi-segment) proposal to anchor the
+   * post-apply locate on. We score each edit by the 1-based line where its
+   * `oldText` begins in the pre-apply `content` and choose the one closest to
+   * the finding's line. This avoids anchoring to a top-of-file `using`/import
+   * edit when the real fix is elsewhere. Falls back to the first edit.
+   */
+  private anchorEditFor(edits: FixEdit[], content: string): FixEdit {
+    if (edits.length <= 1) {
+      return edits[0];
+    }
+    const targetLine = this.request.finding.line;
+    let best = edits[0];
+    let bestDist = Number.POSITIVE_INFINITY;
+    for (const e of edits) {
+      const idx = content.indexOf(e.oldText);
+      if (idx < 0) {
+        continue;
+      }
+      const startLine = content.slice(0, idx).split('\n').length; // 1-based
+      const dist = Math.abs(startLine - targetLine);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = e;
+      }
+    }
+    return best;
   }
 
   /** Reverts a previously-applied proposal by swapping every edit's newText back to oldText. */
