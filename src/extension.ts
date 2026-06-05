@@ -696,6 +696,7 @@ function buildDocModel(
       sourceText: a.sourceText,
       content: a.content,
     })),
+    analyzing: analyzingPaths.has(relPath),
   };
 }
 

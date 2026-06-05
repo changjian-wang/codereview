@@ -39,6 +39,8 @@ export interface DocModel {
   seen: number[];
   findings: DocFinding[];
   annotations: DocAnnotation[];
+  /** True while this file is currently being analyzed (drives the topbar button). */
+  analyzing: boolean;
 }
 
 /** Actions the document panel triggers in the extension host. */
@@ -762,6 +764,10 @@ function render() {
   // file (e.g. after re-analysis) should keep the reader where they were.
   const isNewFile = model.path !== loadedPath;
   loadedPath = model.path;
+  // Drive the analyze button from this file's real state, so switching away from
+  // an analyzing file shows the new file's (idle) button instead of a stuck
+  // 分析中… left over from the previous file.
+  setAnalyzing(!!model.analyzing, true, true);
   $('seg').style.display = model.isMarkdown ? 'flex' : 'none';
   seen.clear();
   for (const l of model.seen) seen.add(l);
@@ -849,7 +855,7 @@ $('act-jump').addEventListener('click', () => vscode.postMessage({ type:'jumpNex
 $('findbar-toggle').addEventListener('click', () => $('findbar').classList.toggle('collapsed'));
 
 let doneTimer = 0;
-function setAnalyzing(on, ok) {
+function setAnalyzing(on, ok, silent) {
   const btn = $('act-analyze');
   if (!btn) return;
   const label = btn.querySelector('.btn-label');
@@ -858,6 +864,11 @@ function setAnalyzing(on, ok) {
     btn.classList.add('analyzing');
     btn.classList.remove('done');
     if (label) label.textContent = '分析中…';
+  } else if (silent) {
+    // Silent reset (e.g. switching files): straight back to idle, no 完成 flash.
+    btn.classList.remove('analyzing');
+    btn.classList.remove('done');
+    if (label) label.textContent = '分析此文件';
   } else {
     btn.classList.remove('analyzing');
     if (ok !== false) {
