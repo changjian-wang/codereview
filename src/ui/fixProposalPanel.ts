@@ -275,6 +275,16 @@ export class FixProposalPanel {
     if (proposal.applied) {
       return;
     }
+    // These proposals are mutually-exclusive alternatives: at most one may be
+    // applied at a time. If another is already applied, refuse and tell the user
+    // to undo it first (rather than silently stacking two alternatives).
+    const other = this.state.proposals.find((p, i) => i !== idx && p.applied);
+    if (other) {
+      void vscode.window.showWarningMessage(
+        `已应用「${other.title}」。这些是互斥的备选方案，如需改用此方案，请先撤销已应用的方案。`,
+      );
+      return;
+    }
     const content = await this.currentFileText();
     // Every edit in the proposal must locate uniquely, or we apply none of them.
     for (const e of proposal.edits) {
@@ -499,6 +509,8 @@ export class FixProposalPanel {
   .proposal.bad .badge { background: var(--vscode-inputValidation-warningBackground); color: var(--vscode-inputValidation-warningForeground); border:1px solid var(--vscode-inputValidation-warningBorder); }
   .proposal.done { opacity:.65; border-color: var(--vscode-charts-green, #4caf50); }
   .proposal.done .badge.ok { background: var(--vscode-charts-green, #4caf50); color: var(--vscode-editor-background); border:1px solid transparent; }
+  .proposal.locked { opacity:.5; }
+  .proposal .badge.muted { background: transparent; color: var(--vscode-descriptionForeground); border:1px solid var(--vscode-panel-border); }
   button { font: inherit; padding: 4px 12px; border: 1px solid var(--vscode-button-border, transparent); border-radius: 3px; cursor: pointer; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
   button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
   button[disabled] { opacity:.5; cursor: not-allowed; }
@@ -560,15 +572,19 @@ export class FixProposalPanel {
         const banner = state.lastApplied
           ? '<div class="status applied">已应用：<strong>' + esc(state.lastApplied) + '</strong>。改动已同步到左侧文件查看器；点击「撤销修改」可还原。</div>'
           : '';
+        const anyApplied = state.proposals.some(function (p) { return p.applied; });
         const altNote = (state.proposals.length > 1 && !state.lastApplied)
           ? '<div class="hint">以下是互斥的备选方案，任选其一应用即可修复，不需要全部应用。</div>'
           : '';
         const cards = state.proposals.map((p, i) => {
           const editCount = (p.edits && p.edits.length) || 1;
           const multi = editCount > 1 ? ' · ' + editCount + ' 处改动' : '';
+          const lockedByOther = anyApplied && !p.applied;
           let badge;
           if (p.applied) {
             badge = '<span class="badge ok">已应用' + multi + '</span>';
+          } else if (lockedByOther) {
+            badge = '<span class="badge muted">备选方案 ' + (i + 1) + multi + '</span>';
           } else if (p.applicable) {
             badge = '<span class="badge">方案 ' + (i + 1) + multi + '</span>';
           } else {
@@ -578,15 +594,17 @@ export class FixProposalPanel {
           let btn;
           if (p.applied) {
             btn = '<button data-undo="' + i + '">撤销修改</button>';
+          } else if (lockedByOther) {
+            btn = '<button disabled title="已应用其他方案，撤销后可改用此方案">已选其他方案</button>';
           } else if (p.applicable) {
             btn = '<button class="primary" data-apply="' + i + '">应用此方案</button>';
           } else {
             btn = '<button disabled>无法应用</button>';
           }
-          const hint = (!p.applied && p.applicable)
+          const hint = (!p.applied && !lockedByOther && p.applicable)
             ? '<div class="hint">应用后会直接写入文件（未保存），左侧文件查看器会立即刷新。</div>'
             : '';
-          const cls = p.applied ? ' done' : (p.applicable ? '' : ' bad');
+          const cls = p.applied ? ' done' : (lockedByOther ? ' locked' : (p.applicable ? '' : ' bad'));
           return [
             '<div class="proposal' + cls + '">',
             '<h3>', esc(p.title), badge, '</h3>',

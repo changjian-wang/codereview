@@ -405,7 +405,8 @@ export class DocumentPanel {
   .f-head { display:flex; align-items:center; gap:8px; padding:6px 10px; cursor:pointer; user-select:none; }
   .f-head:hover .f-title { text-decoration:underline; text-underline-offset:2px; }
   .f-caret { flex:none; width:10px; color:var(--dim); font-size:10px; transition:transform .12s; transform:rotate(90deg); }
-  .finding.collapsed .f-caret { transform:rotate(0deg); } { font-size:11px; padding:1px 7px; border-radius:4px; font-weight:600; flex:none; }
+  .finding.collapsed .f-caret { transform:rotate(0deg); }
+  .f-tag { font-size:11px; padding:1px 7px; border-radius:4px; font-weight:600; flex:none; white-space:nowrap; }
   .finding.bug .f-tag { background:var(--red-bg, rgba(241,76,76,.14)); color:var(--red); }
   .finding.conditional .f-tag { background:rgba(216,192,32,.14); color:var(--yellow); }
   .finding.suggestion .f-tag { background:rgba(86,156,214,.16); color:var(--blue); }
