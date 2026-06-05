@@ -1425,21 +1425,27 @@ async function runGlobalAnalysis(): Promise<void> {
   globalAnalysisInFlight = true;
   globalAnalysisCts = new vscode.CancellationTokenSource();
   const token = globalAnalysisCts.token;
-  WorkbenchPanel.setGlobalProgress(true, '准备分析…');
+  const total = reviewSet.files.length;
+  WorkbenchPanel.setGlobalProgress(true, `准备分析 ${total} 个文件…`);
   try {
     const context: GlobalContextFile[] = [];
+    let read = 0;
     for (const f of reviewSet.files) {
       if (token.isCancellationRequested) {
         return;
       }
-      WorkbenchPanel.setGlobalProgress(true, `读取 ${f.path}…`);
+      read++;
+      WorkbenchPanel.setGlobalProgress(true, `读取源码 (${read}/${total}) ${f.path}…`);
       context.push({
         path: f.path,
         findings: session.findings(f.path),
         content: await readReviewFileText(f.path),
       });
     }
-    WorkbenchPanel.setGlobalProgress(true, '调用模型进行跨文件分析…');
+    WorkbenchPanel.setGlobalProgress(
+      true,
+      `已读取 ${total} 个文件，正在调用模型进行跨文件分析…`,
+    );
     const globalReport = await analyzeGlobal(model, context, token);
     if (session.reviewSet !== reviewSet || token.isCancellationRequested) {
       return;
