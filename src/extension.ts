@@ -1395,10 +1395,13 @@ async function appendLocalFindingNote(
 async function runGlobalAnalysis(): Promise<void> {
   const reviewSet = session.reviewSet;
   if (!reviewSet) {
+    WorkbenchPanel.setGlobalProgress(false);
     transientWarning('尚未开始审查');
     return;
   }
   if (globalAnalysisInFlight) {
+    // Already running — re-assert busy so the button stays disabled, then bail.
+    WorkbenchPanel.setGlobalProgress(true, '全局分析正在进行中…');
     transientInfo('全局分析正在进行中，请稍候');
     return;
   }
@@ -1410,11 +1413,13 @@ async function runGlobalAnalysis(): Promise<void> {
       '取消',
     );
     if (pick !== '继续') {
+      WorkbenchPanel.setGlobalProgress(false);
       return;
     }
   }
   const model = await models.resolve();
   if (!model) {
+    WorkbenchPanel.setGlobalProgress(false);
     void vscode.window.showErrorMessage('Code Review：未找到可用的 Copilot 模型。');
     return;
   }

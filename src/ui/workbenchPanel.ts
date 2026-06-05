@@ -515,6 +515,10 @@ export class WorkbenchPanel {
   .gp-foot { display:flex; align-items:center; gap:.5rem; }
   .gp-msg { flex:1; font-size:.7rem; color:var(--dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .gp-cancel { flex:none; font-size:.68rem; padding:.18rem .45rem; }
+  /* busy global button: inline spinner */
+  #global.busy { display:inline-flex; align-items:center; justify-content:center; gap:.4rem; cursor:progress; }
+  .btn-spin { width:11px; height:11px; flex:none; border-radius:50%; border:2px solid color-mix(in srgb, var(--vscode-button-secondaryForeground, #ccc) 35%, transparent); border-top-color:var(--vscode-button-secondaryForeground, #ccc); animation:gpSpin .7s linear infinite; }
+  @keyframes gpSpin { to { transform:rotate(360deg); } }
   .model-row { display:flex; align-items:center; gap:.4rem; margin-top:.3rem; padding-top:.5rem; border-top:1px dashed var(--line); }
   .model-label { flex:1; font-size:.74rem; color:var(--dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .model-label b { color:var(--blue); font-weight:600; }
@@ -754,7 +758,15 @@ export class WorkbenchPanel {
     renderWindow();
   });
 
-  byId('global')?.addEventListener('click', () => send({ type:'global' }));
+  byId('global')?.addEventListener('click', () => {
+    const btn = byId('global');
+    // Guard against double-submit: disable on the spot, before the host round
+    // trip. The host drives the real busy animation via globalProgress, and
+    // always re-enables (even on an early return) so the button can't get stuck.
+    if (!btn || btn.disabled) return;
+    btn.disabled = true;
+    send({ type:'global' });
+  });
   byId('globalCancel')?.addEventListener('click', () => send({ type:'cancelGlobal' }));
   byId('showGlobal')?.addEventListener('click', () => send({ type:'showGlobal' }));
   byId('pickModel')?.addEventListener('click', () => send({ type:'pickModel' }));
@@ -765,7 +777,13 @@ export class WorkbenchPanel {
     const wrap = byId('globalProg');
     const btn = byId('global');
     const cancel = byId('globalCancel');
-    if (btn) { btn.disabled = !!active; btn.textContent = active ? '分析中…' : '全局逻辑分析'; }
+    if (btn) {
+      btn.disabled = !!active;
+      btn.classList.toggle('busy', !!active);
+      btn.innerHTML = active
+        ? '<span class="btn-spin" aria-hidden="true"></span><span>分析中…</span>'
+        : '全局逻辑分析';
+    }
     if (cancel) cancel.disabled = false;
     if (wrap) wrap.hidden = !active;
     if (active) { const m = byId('globalProgMsg'); if (m) m.textContent = message || ''; }
