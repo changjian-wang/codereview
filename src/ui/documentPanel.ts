@@ -478,7 +478,7 @@ const vscode = acquireVsCodeApi();
 const T = ${JSON.stringify(t)};
 const SEV = ${JSON.stringify(m().severity)};
 const DISP = ${JSON.stringify(m().disposition)};
-const fmt = (s, ...a) => String(s).replace(/\{(\d+)\}/g, (_, i) => a[Number(i)] ?? '');
+const fmt = (s, ...a) => String(s).replace(/\\{(\\d+)\\}/g, (_, i) => a[Number(i)] ?? '');
 let model = null;
 let loadedPath = null;
 let mode = 'source';

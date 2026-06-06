@@ -604,7 +604,7 @@ export class WorkbenchPanel {
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
   const T = ${JSON.stringify(t)};
-  const fmt = (s, ...a) => String(s).replace(/\{(\d+)\}/g, (_, i) => a[Number(i)] ?? '');
+  const fmt = (s, ...a) => String(s).replace(/\\{(\\d+)\\}/g, (_, i) => a[Number(i)] ?? '');
   const send = (m) => vscode.postMessage(m);
   const byId = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? '')

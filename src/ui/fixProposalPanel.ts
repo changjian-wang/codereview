@@ -617,7 +617,7 @@ export class FixProposalPanel {
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const T = ${T};
-    const fmt = (s, ...a) => String(s).replace(/\{(\d+)\}/g, (_, i) => a[Number(i)] ?? '');
+    const fmt = (s, ...a) => String(s).replace(/\\{(\\d+)\\}/g, (_, i) => a[Number(i)] ?? '');
     const body = document.getElementById('body');
     const suppEl = document.getElementById('supp');
     const regenBtn = document.getElementById('regenerate');
