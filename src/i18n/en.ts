@@ -268,6 +268,11 @@ export const en = {
       translate: 'Translation',
       explain: 'Explanation',
     },
+    tokenUnits: [
+      { at: 1e9, suffix: 'B' },
+      { at: 1e6, suffix: 'M' },
+      { at: 1e3, suffix: 'k' },
+    ],
   },
 
   // ── Webview: document panel ──────────────────────────────────────────────────

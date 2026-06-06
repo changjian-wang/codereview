@@ -782,7 +782,13 @@ export class WorkbenchPanel {
     const conclusionWrap = byId('conclusionWrap'); if (conclusionWrap) conclusionWrap.innerHTML = renderConclusion(msg.conclusion);
   }
 
-  function fmtTokenCount(n) { return n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n); }
+  function fmtTokenCount(n) {
+    const units = T.tokenUnits || [];
+    for (let i = 0; i < units.length; i++) {
+      if (n >= units[i].at) return (n / units[i].at).toFixed(1) + units[i].suffix;
+    }
+    return String(n);
+  }
 
   function updateTokenRow(usage) {
     const row = byId('tokenRow');
@@ -791,11 +797,12 @@ export class WorkbenchPanel {
     if (!usage) { row.style.display = 'none'; return; }
     row.style.display = '';
     val.textContent = T.tokenIn + '~' + fmtTokenCount(usage.input) + ' ' + T.tokenOut + '~' + fmtTokenCount(usage.output);
-    const lines = [T.tokenEstimateNote, T.tokenTotal + ': ↑' + usage.input + ' ↓' + usage.output + ' · ' + fmt(T.tokenCalls, usage.calls)];
+    const g = (x) => x.toLocaleString('en-US');
+    const lines = [T.tokenEstimateNote, T.tokenTotal + ': ↑' + g(usage.input) + ' ↓' + g(usage.output) + ' · ' + fmt(T.tokenCalls, usage.calls)];
     const ops = T.tokenOps || {};
     for (const op of Object.keys(usage.byOp || {})) {
       const b = usage.byOp[op];
-      lines.push((ops[op] || op) + ': ↑' + b.input + ' ↓' + b.output + ' (' + b.calls + ')');
+      lines.push((ops[op] || op) + ': ↑' + g(b.input) + ' ↓' + g(b.output) + ' (' + b.calls + ')');
     }
     row.title = lines.join('\\n');
   }
@@ -1255,10 +1262,12 @@ function languageLabel(t: Messages['workbench']): string {
   return `${t.langAuto} (${resolveLanguage()})`;
 }
 
-/** Compact token count: 1234 -> "1.2k", 950 -> "950". */
-function formatTokenCount(n: number): string {
-  if (n >= 1000) {
-    return `${(n / 1000).toFixed(1)}k`;
+/** Compact token count using the active language's unit ladder (en: k/M/B, zh: 万/亿). */
+function formatTokenCount(n: number, units: Messages['workbench']['tokenUnits']): string {
+  for (const u of units) {
+    if (n >= u.at) {
+      return `${(n / u.at).toFixed(1)}${u.suffix}`;
+    }
   }
   return String(n);
 }
@@ -1268,7 +1277,7 @@ function tokenSummary(usage: WorkbenchState['tokenUsage'], t: Messages['workbenc
   if (!usage) {
     return '';
   }
-  return `${t.tokenIn}~${formatTokenCount(usage.input)} ${t.tokenOut}~${formatTokenCount(usage.output)}`;
+  return `${t.tokenIn}~${formatTokenCount(usage.input, t.tokenUnits)} ${t.tokenOut}~${formatTokenCount(usage.output, t.tokenUnits)}`;
 }
 
 /** Multi-line hover tooltip: total + per-operation breakdown. */
@@ -1276,14 +1285,17 @@ function tokenTooltip(usage: WorkbenchState['tokenUsage'], t: Messages['workbenc
   if (!usage) {
     return '';
   }
+  // Group thousands with a fixed locale so the server-rendered tooltip matches
+  // the webview-updated one regardless of host/webview locale differences.
+  const g = (x: number): string => x.toLocaleString('en-US');
   const lines: string[] = [
     t.tokenEstimateNote,
-    `${t.tokenTotal}: ↑${usage.input} ↓${usage.output} · ${fmt(t.tokenCalls, usage.calls)}`,
+    `${t.tokenTotal}: ↑${g(usage.input)} ↓${g(usage.output)} · ${fmt(t.tokenCalls, usage.calls)}`,
   ];
   const opNames: Record<string, string> = t.tokenOps;
   for (const [op, b] of Object.entries(usage.byOp)) {
     const name = opNames[op] ?? op;
-    lines.push(`${name}: ↑${b.input} ↓${b.output} (${b.calls})`);
+    lines.push(`${name}: ↑${g(b.input)} ↓${g(b.output)} (${b.calls})`);
   }
   return lines.join('\n');
 }

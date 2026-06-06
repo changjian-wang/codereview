@@ -238,6 +238,10 @@ export const zh: Messages = {
       translate: '翻译',
       explain: '解释',
     },
+    tokenUnits: [
+      { at: 1e8, suffix: '亿' },
+      { at: 1e4, suffix: '万' },
+    ],
   },
 
   documentPanel: {
