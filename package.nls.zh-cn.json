@@ -3,6 +3,7 @@
   "cmd.openOrStart": "Code Review：打开或开始审查",
   "cmd.openInNewWindow": "Code Review：在新窗口打开",
   "cmd.pickModel": "Code Review：选择分析模型",
+  "cmd.pickLanguage": "Code Review：切换语言",
   "cmd.openWorkbench": "Code Review：打开审查工作台",
   "cmd.openFile": "Code Review：打开改动文件",
   "cmd.analyzeFile": "Code Review：分析当前文件",

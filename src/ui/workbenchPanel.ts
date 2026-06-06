@@ -77,6 +77,8 @@ export interface WorkbenchActions {
   showGlobal(): void;
   submit(): void;
   pickModel(): void;
+  /** Opens the language picker (UI + LLM output language). */
+  pickLanguage(): void;
   /** Opens the scope picker (used both for first-time review and for switching). */
   pickScope(): void;
 }
@@ -124,6 +126,7 @@ type InboundMessage =
   | { type: 'showGlobal' }
   | { type: 'submit' }
   | { type: 'pickModel' }
+  | { type: 'pickLanguage' }
   | { type: 'pickScope' }
   | { type: 'toggleFolder'; path: string };
 
@@ -216,6 +219,15 @@ export class WorkbenchPanel {
   }
 
   /**
+   * Forces a full HTML rebuild (not the in-place patch), if open. Needed when
+   * something outside the file-structure signature changes the rendered markup —
+   * e.g. a language switch, where every label in the static HTML must change.
+   */
+  static rerenderIfOpen(): void {
+    WorkbenchPanel.current?.forceFullRender();
+  }
+
+  /**
    * Drives the inline global-analysis progress strip in the workbench (instead
    * of a parent-window notification, which is easy to miss when the workbench
    * lives in its own auxiliary window). `active` toggles the busy state; the
@@ -266,6 +278,23 @@ export class WorkbenchPanel {
       return;
     }
     this.lastStructureSig = sig;
+    this.rendered = true;
+    this.lastSnapshot = snapshotFor(state);
+    this.panel.webview.html = this.render(state);
+  }
+
+  /**
+   * Forces a full `webview.html` rebuild regardless of the structure signature.
+   * Used for changes the in-place patch path cannot express (e.g. a language
+   * switch, which rewrites every static label).
+   */
+  private forceFullRender(): void {
+    if (this.refreshTimer) {
+      clearTimeout(this.refreshTimer);
+      this.refreshTimer = undefined;
+    }
+    const state = this.getState();
+    this.lastStructureSig = state.hasReviewSet ? structureSig(state.files) : '__empty__';
     this.rendered = true;
     this.lastSnapshot = snapshotFor(state);
     this.panel.webview.html = this.render(state);
@@ -357,6 +386,9 @@ export class WorkbenchPanel {
         break;
       case 'pickModel':
         this.actions.pickModel();
+        break;
+      case 'pickLanguage':
+        this.actions.pickLanguage();
         break;
       case 'pickScope':
         this.actions.pickScope();
@@ -541,6 +573,10 @@ export class WorkbenchPanel {
   .model-label { flex:1; font-size:.74rem; color:var(--dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .model-label b { color:var(--blue); font-weight:600; }
   .model-row button { flex:none; }
+  .lang-row { display:flex; align-items:center; gap:.4rem; margin-top:.3rem; }
+  .lang-label { flex:1; font-size:.74rem; color:var(--dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .lang-label b { color:var(--blue); font-weight:600; }
+  .lang-row button { flex:none; }
   button { font-family:inherit; font-size:.78rem; cursor:pointer; border:1px solid var(--line); border-radius:5px; padding:.34rem .5rem; background:var(--vscode-button-secondaryBackground); color:var(--vscode-button-secondaryForeground); white-space:nowrap; }
   button:hover { background:var(--vscode-toolbar-hoverBackground); }
   button.primary { background:var(--vscode-button-background); color:var(--vscode-button-foreground); border-color:transparent; }
@@ -579,6 +615,10 @@ export class WorkbenchPanel {
         <div class="model-row">
           <span id="modelLabel" class="model-label" title="${escAttr(state.modelLabel)}">${esc(t.modelPrefix)}<b>${esc(state.modelLabel)}</b></span>
           <button id="pickModel">${esc(t.switch)}</button>
+        </div>
+        <div class="lang-row">
+          <span class="lang-label" title="${escAttr(t.languageTitle)}">${esc(t.languagePrefix)}<b>${esc(languageLabel(t))}</b></span>
+          <button id="pickLanguage">${esc(t.switch)}</button>
         </div>
       </div>
       <div class="hud">
@@ -812,6 +852,7 @@ export class WorkbenchPanel {
   byId('globalCancel')?.addEventListener('click', () => send({ type:'cancelGlobal' }));
   byId('showGlobal')?.addEventListener('click', () => send({ type:'showGlobal' }));
   byId('pickModel')?.addEventListener('click', () => send({ type:'pickModel' }));
+  byId('pickLanguage')?.addEventListener('click', () => send({ type:'pickLanguage' }));
   byId('pickScope')?.addEventListener('click', () => send({ type:'pickScope' }));
   byId('submit')?.addEventListener('click', () => send({ type:'submit' }));
 
@@ -1200,6 +1241,18 @@ function formatTime(ms: number): string {
   const d = new Date(ms);
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** Display name for the current `codereview.language` setting, e.g. "中文 (zh-CN)". */
+function languageLabel(t: Messages['workbench']): string {
+  const choice = vscode.workspace.getConfiguration('codereview').get<string>('language', 'en');
+  if (choice === 'zh-CN') {
+    return t.langZh;
+  }
+  if (choice === 'en') {
+    return t.langEn;
+  }
+  return `${t.langAuto} (${resolveLanguage()})`;
 }
 
 /** Compact token count: 1234 -> "1.2k", 950 -> "950". */

@@ -3,6 +3,7 @@
   "cmd.openOrStart": "Code Review: Open or Start Review",
   "cmd.openInNewWindow": "Code Review: Open in New Window",
   "cmd.pickModel": "Code Review: Select Analysis Model",
+  "cmd.pickLanguage": "Code Review: Switch Language",
   "cmd.openWorkbench": "Code Review: Open Workbench",
   "cmd.openFile": "Code Review: Open Changed File",
   "cmd.analyzeFile": "Code Review: Analyze Current File",

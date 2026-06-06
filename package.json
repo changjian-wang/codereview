@@ -2,7 +2,7 @@
   "name": "codereview",
   "displayName": "Code Review Gate",
   "description": "Distrust-driven code review: per-line coverage gate plus file-level and cross-file AI analysis, powered by the GitHub CLI and VS Code's Copilot models.",
-  "version": "0.0.47",
+  "version": "0.0.48",
   "publisher": "codereview-dev",
   "private": true,
   "license": "MIT",
@@ -43,6 +43,11 @@
         "command": "codereview.pickModel",
         "title": "%cmd.pickModel%",
         "icon": "$(sparkle)"
+      },
+      {
+        "command": "codereview.pickLanguage",
+        "title": "%cmd.pickLanguage%",
+        "icon": "$(globe)"
       },
       {
         "command": "codereview.openWorkbench",

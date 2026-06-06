@@ -55,6 +55,7 @@ export const zh: Messages = {
     pickTitle: 'Code Review · 选择分析模型',
     pickPlaceholder: '选择用于代码审查分析的模型',
     pickPlaceholderEmpty: '未检测到 Copilot 模型，可先选 Auto',
+    current: '当前',
   },
 
   analysis: {
@@ -201,6 +202,12 @@ export const zh: Messages = {
     cancel: '取消',
     modelPrefix: '模型：',
     switch: '切换',
+    languagePrefix: '语言：',
+    languageTitle: 'Code Review · 切换语言',
+    languagePlaceholder: 'UI 与所有 LLM 输出使用的语言',
+    langEn: 'English',
+    langZh: '中文 (zh-CN)',
+    langAuto: '跟随系统',
     lineCoverage: '行覆盖',
     filesReady: '文件就绪',
     gatePass: '门禁已通过，可提交结论',

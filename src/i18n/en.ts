@@ -66,6 +66,7 @@ export const en = {
     pickTitle: 'Code Review · Select analysis model',
     pickPlaceholder: 'Select the model used for code review analysis',
     pickPlaceholderEmpty: 'No Copilot model detected; you can start with Auto',
+    current: 'current',
   },
 
   analysis: {
@@ -231,6 +232,12 @@ export const en = {
     cancel: 'Cancel',
     modelPrefix: 'Model: ',
     switch: 'Switch',
+    languagePrefix: 'Language: ',
+    languageTitle: 'Code Review · Switch language',
+    languagePlaceholder: 'Language for the UI and all LLM output',
+    langEn: 'English',
+    langZh: '中文 (zh-CN)',
+    langAuto: 'Auto',
     lineCoverage: 'Line coverage',
     filesReady: 'Files ready',
     gatePass: 'Gate passed — you can submit the conclusion',

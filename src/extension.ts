@@ -193,6 +193,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('codereview.openOrStart', openOrStartReview),
     vscode.commands.registerCommand('codereview.openInNewWindow', openInNewWindow),
     vscode.commands.registerCommand('codereview.pickModel', selectModel),
+    vscode.commands.registerCommand('codereview.pickLanguage', selectLanguage),
     vscode.commands.registerCommand('codereview.openWorkbench', openWorkbench),
     vscode.commands.registerCommand('codereview.openFile', openFileInPanel),
     vscode.commands.registerCommand('codereview.analyzeFile', analyzeCurrentFile),
@@ -212,7 +213,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     onLanguageChange(() => {
       refreshStatusBarText();
-      WorkbenchPanel.refreshIfOpen();
+      WorkbenchPanel.rerenderIfOpen();
       DocumentPanel.refreshIfOpen();
       FixProposalPanel.refreshIfOpen();
       GlobalReportPanel.refreshIfOpen();
@@ -482,6 +483,34 @@ async function selectModel(): Promise<void> {
   }
 }
 
+/**
+ * Lets the user switch the whole-experience language (UI + LLM output) from
+ * inside Code Review, instead of digging through VS Code settings. Writes
+ * `codereview.language`, which the config-change listener picks up to re-render
+ * the status bar and any open webviews live.
+ */
+async function selectLanguage(): Promise<void> {
+  const current = vscode.workspace.getConfiguration('codereview').get<string>('language', 'en');
+  const t = m().model;
+  const pick = await vscode.window.showQuickPick(
+    [
+      { label: m().workbench.langEn, value: 'en' as const },
+      { label: m().workbench.langZh, value: 'zh-CN' as const },
+      { label: m().workbench.langAuto, value: 'auto' as const },
+    ].map((o) => ({ ...o, description: o.value === current ? t.current : undefined })),
+    { title: m().workbench.languageTitle, placeHolder: m().workbench.languagePlaceholder },
+  );
+  if (!pick || pick.value === current) {
+    return;
+  }
+  // Update at the highest scope that already defines it, else global, so the
+  // change actually takes effect regardless of where the user set it before.
+  await vscode.workspace
+    .getConfiguration('codereview')
+    .update('language', pick.value, vscode.ConfigurationTarget.Global);
+  // The onDidChangeConfiguration listener refreshes UI; nothing else to do.
+}
+
 /** Opens (or reveals) the Review Workbench webview. */
 async function openWorkbench(opts: { moveToNewWindow?: boolean } = {}): Promise<void> {
   WorkbenchPanel.show(buildWorkbenchState, workbenchActions());
@@ -518,6 +547,7 @@ function workbenchActions(): import('./ui/workbenchPanel').WorkbenchActions {
     showGlobal: showGlobalReport,
     submit: () => void submitConclusion(),
     pickModel: () => void selectModel(),
+    pickLanguage: () => void selectLanguage(),
     pickScope: () => void startReview(),
   };
 }
