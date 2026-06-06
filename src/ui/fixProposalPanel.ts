@@ -11,7 +11,7 @@ export interface FixProposalRequest {
   fileUri: vscode.Uri;
   finding: { id: string; line: number; title: string; detail: string; suggestion?: string };
   /** Generates a fresh set of proposals against the **current** file content. */
-  generate: (token: vscode.CancellationToken) => Promise<FixProposal[]>;
+  generate: (token: vscode.CancellationToken, userContext?: string) => Promise<FixProposal[]>;
   /** Called after a proposal is successfully applied (so disposition can flip). */
   onApplied: (edit: { oldText: string; newText: string }) => void;
   /** Called whenever the file content changes via this panel (apply or undo). */
@@ -52,6 +52,8 @@ interface CachedEntry {
   proposals: CachedProposal[];
   lastApplied?: string;
   generatedAt: number;
+  /** Reviewer's supplementary note used to steer (re)generation; persisted so it survives reloads. */
+  supplement?: string;
 }
 
 const CACHE_MEMENTO_KEY = 'codereview.fixProposals.v1';
@@ -70,6 +72,8 @@ export class FixProposalPanel {
   private state: PanelState = { kind: 'loading', message: m().fixPanel.generating };
   private generating?: vscode.CancellationTokenSource;
   private hasNotifiedApplied = false;
+  /** Reviewer's current supplementary note; steers (re)generation and is persisted per cacheKey. */
+  private currentSupplement = '';
   private readonly disposables: vscode.Disposable[] = [];
 
   private constructor(
@@ -169,13 +173,17 @@ export class FixProposalPanel {
     void this.run();
   }
 
-  private async run(options?: { force?: boolean }): Promise<void> {
+  private async run(options?: { force?: boolean; supplement?: string }): Promise<void> {
     this.cancelGeneration();
     const key = FixProposalPanel.keyOf(this.request);
     // Fast path: re-use cached proposals so users can navigate between findings
     // without paying the LLM round-trip every time.
     if (!options?.force) {
       const cached = FixProposalPanel.cache.get(key);
+      if (cached) {
+        // Restore the reviewer's prior supplement so it stays in the textarea.
+        this.currentSupplement = cached.supplement ?? '';
+      }
       if (cached && cached.proposals.length > 0) {
         try {
           await this.restoreFromCache(cached);
@@ -185,11 +193,15 @@ export class FixProposalPanel {
         }
       }
     }
+    // The supplement that should steer this generation: an explicit one from the
+    // regenerate action, else whatever the reviewer last entered.
+    const supplement = options?.supplement ?? this.currentSupplement;
+    this.currentSupplement = supplement;
     const cts = new vscode.CancellationTokenSource();
     this.generating = cts;
     this.setState({ kind: 'loading', message: m().fixPanel.generating });
     try {
-      const proposals = await this.request.generate(cts.token);
+      const proposals = await this.request.generate(cts.token, supplement || undefined);
       if (cts.token.isCancellationRequested) {
         return;
       }
@@ -200,6 +212,7 @@ export class FixProposalPanel {
         proposals: views.map(toCached),
         lastApplied: undefined,
         generatedAt: Date.now(),
+        supplement: supplement || undefined,
       });
     } catch (err) {
       if (cts.token.isCancellationRequested) {
@@ -243,17 +256,21 @@ export class FixProposalPanel {
       proposals: this.state.proposals.map(toCached),
       lastApplied: this.state.lastApplied,
       generatedAt,
+      supplement: this.currentSupplement || undefined,
     });
   }
 
-  private async onMessage(msg: { type: string; idx?: number }): Promise<void> {
+  private async onMessage(msg: { type: string; idx?: number; supplement?: string }): Promise<void> {
     if (msg.type === 'regenerate') {
-      // Explicit regenerate — drop the cache so we actually call the model again.
+      // Capture the reviewer's supplement (may be empty to clear it).
+      this.currentSupplement = (msg.supplement ?? '').trim();
+      // Explicit regenerate — drop the cached proposals so we actually call the
+      // model again, but carry the supplement forward to steer it.
       FixProposalPanel.cache.delete(
         FixProposalPanel.keyOf(this.request),
       );
       FixProposalPanel.flush();
-      void this.run({ force: true });
+      void this.run({ force: true, supplement: this.currentSupplement });
       return;
     }
     if (msg.type === 'cancel') {
@@ -564,6 +581,10 @@ export class FixProposalPanel {
   .status.applied { background: var(--vscode-editorGutter-addedBackground, var(--vscode-editorWidget-background)); border:1px solid var(--vscode-panel-border); margin-bottom:12px; }
   .status.applied kbd { background: var(--vscode-keybindingLabel-background, rgba(128,128,128,.2)); border:1px solid var(--vscode-keybindingLabel-border, rgba(128,128,128,.4)); border-radius:3px; padding:0 4px; font-family: var(--vscode-editor-font-family, monospace); font-size:11px; }
   .hint { font-size:11px; color: var(--vscode-descriptionForeground); margin-top:4px; }
+  .supplement { margin: 12px 0 16px; }
+  .supp-label { display:block; font-size:11px; color: var(--vscode-descriptionForeground); margin-bottom:4px; }
+  .supp-input { width:100%; box-sizing:border-box; resize:vertical; min-height:38px; font-family: inherit; font-size:12px; line-height:1.5; padding:6px 8px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border:1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius:4px; outline:none; }
+  .supp-input:focus { border-color: var(--vscode-focusBorder); }
   .diff { font-family: var(--vscode-editor-font-family, ui-monospace, monospace); font-size: 12px; line-height: 1.5; background: var(--vscode-textCodeBlock-background, var(--vscode-editor-background)); border:1px solid var(--vscode-panel-border); border-radius:4px; margin:0 0 10px; overflow:auto; max-height: 360px; }
   .diff .row { display:flex; padding:0 8px; white-space: pre; }
   .diff .row.add { background: var(--vscode-diffEditor-insertedTextBackground, rgba(0,160,0,.12)); }
@@ -583,6 +604,11 @@ export class FixProposalPanel {
     <div id="f-detail">${escapeHtml(this.request.finding.detail)}</div>
     <div class="meta" id="f-suggest"${this.request.finding.suggestion ? '' : ' style="display:none"'}>${this.request.finding.suggestion ? escapeHtml(t.suggestionPrefix) + escapeHtml(this.request.finding.suggestion) : ''}</div>
   </div>
+  <div class="supplement">
+    <label class="supp-label" for="supp">${escapeHtml(t.supplementLabel)}</label>
+    <textarea id="supp" class="supp-input" rows="2" placeholder="${escapeHtml(t.supplementPlaceholder)}">${escapeHtml(this.currentSupplement)}</textarea>
+    <div class="hint">${escapeHtml(t.supplementHint)}</div>
+  </div>
   <div class="toolbar">
     <button id="regenerate" class="primary">${escapeHtml(t.regenerate)}</button>
     <button id="cancel">${escapeHtml(t.close)}</button>
@@ -593,7 +619,13 @@ export class FixProposalPanel {
     const T = ${T};
     const fmt = (s, ...a) => String(s).replace(/\{(\d+)\}/g, (_, i) => a[Number(i)] ?? '');
     const body = document.getElementById('body');
-    document.getElementById('regenerate').addEventListener('click', () => vscode.postMessage({ type: 'regenerate' }));
+    const suppEl = document.getElementById('supp');
+    const regenBtn = document.getElementById('regenerate');
+    function syncRegenLabel() {
+      regenBtn.textContent = (suppEl && suppEl.value.trim()) ? T.regenerateWithSupplement : T.regenerate;
+    }
+    if (suppEl) { suppEl.addEventListener('input', syncRegenLabel); syncRegenLabel(); }
+    regenBtn.addEventListener('click', () => vscode.postMessage({ type: 'regenerate', supplement: suppEl ? suppEl.value : '' }));
     document.getElementById('cancel').addEventListener('click', () => vscode.postMessage({ type: 'cancel' }));
 
     function esc(s) {

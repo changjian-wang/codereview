@@ -71,8 +71,25 @@ export interface ReviewSnapshot {
   globalDone: boolean;
   /** The reviewer's final verdict, once submitted. */
   conclusion?: ReviewConclusion;
+  /** Estimated LLM token usage accumulated over this review (approximate). */
+  tokenUsage?: TokenAccount;
   updatedAt: number;
 }
+
+/**
+ * Accumulated, estimated token usage for a review. Totals are approximations
+ * (via `countTokens`), NOT the provider's billed counts. `byOp` buckets usage
+ * by operation kind so the UI can show a breakdown.
+ */
+export interface TokenAccount {
+  totalInput: number;
+  totalOutput: number;
+  /** Number of LLM calls counted. */
+  calls: number;
+  /** Per-operation breakdown, keyed by LlmOp ('analyze' | 'global' | ...). */
+  byOp: Record<string, { input: number; output: number; calls: number }>;
+}
+
 
 /** Identity of a review snapshot. */
 export interface ReviewKey {

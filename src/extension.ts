@@ -13,6 +13,7 @@ import {
   translateSelection,
   explainCode,
   AnalysisError,
+  setTokenUsageSink,
   type GlobalContextFile,
 } from './ai/analyzer';
 import type { Finding } from './ai/types';
@@ -160,6 +161,13 @@ export function activate(context: vscode.ExtensionContext): void {
   const repo = workspaceFolderName() ?? 'unknown';
   const store = new WorkspaceStateReviewStore(context.workspaceState);
   session = new ReviewSession(store, repo);
+
+  // Accumulate estimated LLM token usage onto the active review and refresh the
+  // workbench HUD. Estimates are approximate (countTokens-based), not billed.
+  setTokenUsageSink((usage) => {
+    session.recordTokenUsage(usage);
+    WorkbenchPanel.refreshIfOpen();
+  });
 
   // Wire the fix-proposal cache so previously generated suggestions persist
   // across reloads and rapid navigation between findings.
@@ -659,6 +667,14 @@ function buildWorkbenchState(): WorkbenchState {
     globalDone: session.globalConfirmed,
     hasGlobalReport: !!session.globalReport,
     modelLabel: models.label,
+    tokenUsage: session.tokenUsage
+      ? {
+          input: session.tokenUsage.totalInput,
+          output: session.tokenUsage.totalOutput,
+          calls: session.tokenUsage.calls,
+          byOp: session.tokenUsage.byOp,
+        }
+      : undefined,
     conclusion: session.conclusion
       ? {
           label: session.conclusion.label,
@@ -1214,7 +1230,7 @@ async function openFixProposal(rel: string, finding: Finding): Promise<void> {
       detail: finding.detail,
       suggestion: finding.suggestion,
     },
-    generate: async (token) => {
+    generate: async (token, userContext) => {
       const model = await models.resolve();
       if (!model) {
         const prompt = composeFixPrompt(finding);
@@ -1239,6 +1255,7 @@ async function openFixProposal(rel: string, finding: Finding): Promise<void> {
           anchor: finding.anchor,
         },
         token,
+        userContext,
       );
     },
     onApplied: (edit) => {

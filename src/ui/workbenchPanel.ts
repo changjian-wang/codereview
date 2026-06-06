@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import type { FindingSeverity } from '../ai/types';
 import { esc, escAttr, nonce as makeNonce } from './html';
-import { m, fmt, resolveLanguage } from '../i18n';
+import { m, fmt, resolveLanguage, type Messages } from '../i18n';
 
 export type FindingDispositionKind = 'fixed' | 'commented' | 'ignored';
 
@@ -48,12 +48,23 @@ export interface WorkbenchState {
   globalDone: boolean;
   hasGlobalReport: boolean;
   modelLabel: string;
+  /** Estimated LLM token usage for this review (approximate, not billed). */
+  tokenUsage?: WorkbenchTokenUsage;
   conclusion?: {
     label: string;
     target: 'pr' | 'local';
     prNumber?: number;
     submittedAt: number;
   };
+}
+
+/** Estimated token usage shown in the workbench HUD (approximate, not billed). */
+export interface WorkbenchTokenUsage {
+  input: number;
+  output: number;
+  calls: number;
+  /** Per-operation breakdown for the hover tooltip. */
+  byOp: Record<string, { input: number; output: number; calls: number }>;
 }
 
 /** Actions the workbench can trigger in the extension host. */
@@ -100,6 +111,7 @@ interface WorkbenchPatchSnapshot {
   globalDone: boolean;
   hasGlobalReport: boolean;
   modelLabel: string;
+  tokenUsage?: WorkbenchState['tokenUsage'];
   conclusion?: WorkbenchState['conclusion'];
 }
 
@@ -272,6 +284,7 @@ export class WorkbenchPanel {
     globalDone: boolean;
     hasGlobalReport: boolean;
     modelLabel: string;
+    tokenUsage?: WorkbenchState['tokenUsage'];
     conclusion?: WorkbenchState['conclusion'];
   } {
     const next = snapshotFor(state);
@@ -287,6 +300,7 @@ export class WorkbenchPanel {
         globalDone: next.globalDone,
         hasGlobalReport: next.hasGlobalReport,
         modelLabel: next.modelLabel,
+        tokenUsage: next.tokenUsage,
         conclusion: next.conclusion,
       };
     }
@@ -313,6 +327,7 @@ export class WorkbenchPanel {
       globalDone: next.globalDone,
       hasGlobalReport: next.hasGlobalReport,
       modelLabel: next.modelLabel,
+      tokenUsage: next.tokenUsage,
       conclusion: next.conclusion,
     };
   }
@@ -572,6 +587,9 @@ export class WorkbenchPanel {
         <div class="hud-row" style="margin-top:.55rem; margin-bottom:0;">
           <span class="lbl">${esc(t.filesReady)}</span><span id="filesReady" class="val">${state.coverage.filesReady}/${state.coverage.filesTotal}</span>
         </div>
+        <div class="hud-row" id="tokenRow" style="margin-top:.55rem; margin-bottom:0; ${state.tokenUsage ? '' : 'display:none'}" title="${escAttr(tokenTooltip(state.tokenUsage, t))}">
+          <span class="lbl">${esc(t.tokens)}</span><span id="tokenVal" class="val">${esc(tokenSummary(state.tokenUsage, t))}</span>
+        </div>
         <div id="gateChip" class="gate-chip ${gateOk ? 'ok' : 'locked'}">
           <span id="gateIcon">${gateOk ? '✓' : '🔒'}</span>
           <span id="gateText">${gateOk ? esc(t.gatePass) : esc(t.gateFail)}</span>
@@ -720,7 +738,26 @@ export class WorkbenchPanel {
     const showGlobal = byId('showGlobal'); if (showGlobal) showGlobal.disabled = !msg.hasGlobalReport;
     const modelLabel = byId('modelLabel');
     if (modelLabel) { modelLabel.title = msg.modelLabel; modelLabel.innerHTML = T.modelPrefix + '<b>' + esc(msg.modelLabel) + '</b>'; }
+    updateTokenRow(msg.tokenUsage);
     const conclusionWrap = byId('conclusionWrap'); if (conclusionWrap) conclusionWrap.innerHTML = renderConclusion(msg.conclusion);
+  }
+
+  function fmtTokenCount(n) { return n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n); }
+
+  function updateTokenRow(usage) {
+    const row = byId('tokenRow');
+    const val = byId('tokenVal');
+    if (!row || !val) return;
+    if (!usage) { row.style.display = 'none'; return; }
+    row.style.display = '';
+    val.textContent = T.tokenIn + '~' + fmtTokenCount(usage.input) + ' ' + T.tokenOut + '~' + fmtTokenCount(usage.output);
+    const lines = [T.tokenEstimateNote, T.tokenTotal + ': ↑' + usage.input + ' ↓' + usage.output + ' · ' + fmt(T.tokenCalls, usage.calls)];
+    const ops = T.tokenOps || {};
+    for (const op of Object.keys(usage.byOp || {})) {
+      const b = usage.byOp[op];
+      lines.push((ops[op] || op) + ': ↑' + b.input + ' ↓' + b.output + ' (' + b.calls + ')');
+    }
+    row.title = lines.join('\\n');
   }
 
   // Event delegation: one listener handles every (virtualized) row.
@@ -1086,6 +1123,7 @@ function snapshotFor(state: WorkbenchState): WorkbenchPatchSnapshot {
     globalDone: state.globalDone,
     hasGlobalReport: state.hasGlobalReport,
     modelLabel: state.modelLabel,
+    tokenUsage: state.tokenUsage,
     conclusion: state.conclusion,
   };
 }
@@ -1162,4 +1200,37 @@ function formatTime(ms: number): string {
   const d = new Date(ms);
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** Compact token count: 1234 -> "1.2k", 950 -> "950". */
+function formatTokenCount(n: number): string {
+  if (n >= 1000) {
+    return `${(n / 1000).toFixed(1)}k`;
+  }
+  return String(n);
+}
+
+/** One-line HUD token summary, e.g. "↑~12.4k ↓~3.1k". Empty string when no usage. */
+function tokenSummary(usage: WorkbenchState['tokenUsage'], t: Messages['workbench']): string {
+  if (!usage) {
+    return '';
+  }
+  return `${t.tokenIn}~${formatTokenCount(usage.input)} ${t.tokenOut}~${formatTokenCount(usage.output)}`;
+}
+
+/** Multi-line hover tooltip: total + per-operation breakdown. */
+function tokenTooltip(usage: WorkbenchState['tokenUsage'], t: Messages['workbench']): string {
+  if (!usage) {
+    return '';
+  }
+  const lines: string[] = [
+    t.tokenEstimateNote,
+    `${t.tokenTotal}: ↑${usage.input} ↓${usage.output} · ${fmt(t.tokenCalls, usage.calls)}`,
+  ];
+  const opNames: Record<string, string> = t.tokenOps;
+  for (const [op, b] of Object.entries(usage.byOp)) {
+    const name = opNames[op] ?? op;
+    lines.push(`${name}: ↑${b.input} ↓${b.output} (${b.calls})`);
+  }
+  return lines.join('\n');
 }

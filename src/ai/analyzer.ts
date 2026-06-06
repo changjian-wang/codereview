@@ -16,6 +16,47 @@ import { m } from '../i18n';
 /** Raised when analysis cannot complete; message is user-facing. */
 export class AnalysisError extends Error {}
 
+/** The kind of LLM operation, used to bucket token usage by purpose. */
+export type LlmOp = 'analyze' | 'global' | 'fix' | 'diff' | 'translate' | 'explain';
+
+/** A single LLM call's estimated token usage. Estimated locally via `countTokens`. */
+export interface TokenUsage {
+  op: LlmOp;
+  /** Estimated input tokens (system + user). */
+  input: number;
+  /** Estimated output tokens. */
+  output: number;
+}
+
+/**
+ * Optional sink that receives an estimated token-usage record after each LLM
+ * call. Wired by the host (extension.ts) so usage can be accumulated on the
+ * review session. Estimation uses `model.countTokens`, so totals are an
+ * approximation — they are NOT the provider's billed token counts.
+ */
+export type TokenUsageSink = (usage: TokenUsage) => void;
+
+let usageSink: TokenUsageSink | undefined;
+
+/** Registers the token-usage sink. Pass `undefined` to detach. */
+export function setTokenUsageSink(sink: TokenUsageSink | undefined): void {
+  usageSink = sink;
+}
+
+/**
+ * Best-effort token estimate for a string against the given model. Returns 0 on
+ * any failure (countTokens can throw / be unavailable) so accounting never
+ * breaks the primary analysis flow.
+ */
+async function estimateTokens(model: vscode.LanguageModelChat, text: string): Promise<number> {
+  try {
+    return await model.countTokens(text);
+  } catch {
+    return 0;
+  }
+}
+
+
 const FILE_SYSTEM_PROMPT = `你是一名严格的资深代码审查员。审查给定源码文件的逻辑、正确性、并发与安全问题。
 只输出 JSON，不要任何解释文字或 markdown 代码围栏。
 JSON 结构：{"findings":[{"line":<1基行号>,"endLine":<可选>,"anchor":"问题所在的原始代码片段（逐字、不含行号前缀，连续一到数行且在文件中能唯一定位）","severity":"bug"|"conditional"|"suggestion","title":"简短标题","detail":"问题与证据","suggestion":"可选的修复建议"}]}
@@ -62,7 +103,7 @@ async function ask(
   system: string,
   user: string,
   token: vscode.CancellationToken,
-  options: { skipLanguageDirective?: boolean } = {},
+  options: { skipLanguageDirective?: boolean; op?: LlmOp } = {},
 ): Promise<string> {
   const fullSystem = options.skipLanguageDirective
     ? system
@@ -83,6 +124,19 @@ async function ask(
     }
     throw err;
   }
+  // Estimate and report token usage after a successful call. The VS Code LM API
+  // does not expose billed usage, so we approximate via countTokens; failures
+  // here must never disturb the analysis result.
+  if (usageSink && options.op && !token.isCancellationRequested) {
+    const op = options.op;
+    void (async () => {
+      const [input, output] = await Promise.all([
+        estimateTokens(model, fullSystem).then(async (s) => s + (await estimateTokens(model, user))),
+        estimateTokens(model, out),
+      ]);
+      usageSink?.({ op, input, output });
+    })();
+  }
   return out;
 }
 
@@ -96,7 +150,7 @@ export async function translateSelection(
     `${languageDirective()}\n\n` +
     "You are a professional technical translator. Translate the user's content into the target language stated above, " +
     'keeping code identifiers and domain terms verbatim. Output only the translation — no explanation, quotes, or markdown fences.';
-  const out = await ask(model, system, text, token, { skipLanguageDirective: true });
+  const out = await ask(model, system, text, token, { skipLanguageDirective: true, op: 'translate' });
   return out.trim();
 }
 
@@ -109,7 +163,7 @@ export async function explainCode(
   const system =
     '你是资深代码审查助手。解释用户给出的这段代码：它做什么、关键逻辑/控制流、涉及的副作用或边界条件，以及可能值得注意的风险点。' +
     '语言简洁专业，可用短句或最多 3-5 条要点。只输出解释正文，不要复述原代码，不要 markdown 标题或代码围栏。';
-  const out = await ask(model, system, code, token);
+  const out = await ask(model, system, code, token, { op: 'explain' });
   return out.trim();
 }
 
@@ -207,7 +261,7 @@ export async function analyzeFile(
 ): Promise<Finding[]> {
   const numbered = numberifyLines(document.getText());
   const user = `文件路径：${document.uri.fsPath}\n语言：${document.languageId}\n以下每行以「行号<TAB>内容」给出：\n\n${numbered}`;
-  const raw = await ask(model, FILE_SYSTEM_PROMPT, user, token);
+  const raw = await ask(model, FILE_SYSTEM_PROMPT, user, token, { op: 'analyze' });
   const parsed = parseJson<{ findings?: unknown[] }>(raw);
   const list = Array.isArray(parsed.findings) ? parsed.findings : [];
   const lineCount = document.lineCount;
@@ -269,7 +323,7 @@ export async function analyzeGlobal(
   });
   const summary = sections.join('\n\n----\n\n');
   const user = `审查集共 ${files.length} 个文件。请基于下面每个文件的真实源码与文件级发现，给出跨文件的全局逻辑分析。务必依据源码中可见的事实（DI 注册、调用关系、配置键、分层依赖）作出判断，不要臆测。\n\n${summary}`;
-  const raw = await ask(model, GLOBAL_SYSTEM_PROMPT, user, token);
+  const raw = await ask(model, GLOBAL_SYSTEM_PROMPT, user, token, { op: 'global' });
   const parsed = parseJson<{
     conclusion?: string;
     recommendation?: string;
@@ -367,7 +421,7 @@ ${fix.suggestion ? `建议方向：${fix.suggestion}\n` : ''}
 ${fileContent}
 
 请生成针对该文件的统一 diff。`;
-  const raw = await ask(model, DIFF_SYSTEM_PROMPT, user, token);
+  const raw = await ask(model, DIFF_SYSTEM_PROMPT, user, token, { op: 'diff' });
   let t = raw.trim();
   const fence = t.match(/```(?:diff|patch)?\s*([\s\S]*?)```/i);
   if (fence) {
@@ -417,6 +471,7 @@ export async function generateFixProposals(
   fileContent: string,
   finding: { title: string; detail: string; suggestion?: string; line: number; endLine?: number; anchor?: string },
   token: vscode.CancellationToken,
+  userContext?: string,
 ): Promise<FixProposal[]> {
   const numbered = numberifyLines(fileContent);
   const range = finding.endLine && finding.endLine > finding.line
@@ -425,16 +480,21 @@ export async function generateFixProposals(
   const anchorBlock = finding.anchor
     ? `问题代码（务必只修复这段，不要改到文件里其它类似位置）：\n${finding.anchor}\n\n`
     : '';
+  // The reviewer's supplementary note carries the highest authority: it may
+  // correct or constrain the model's original judgment, so place it prominently.
+  const supplement = userContext && userContext.trim()
+    ? `审查者补充（权威，请据此修正或约束你的方案；如与「问题说明」冲突，以本补充为准）：\n${userContext.trim()}\n\n`
+    : '';
   const user = `文件：${fileRelPath}
 审查发现：${finding.title}（${range}）
 问题说明：${finding.detail}
 ${finding.suggestion ? `建议方向：${finding.suggestion}\n` : ''}
-${anchorBlock}源码（每行以「行号<TAB>内容」给出）：
+${supplement}${anchorBlock}源码（每行以「行号<TAB>内容」给出）：
 
 ${numbered}
 
 请按上述 JSON 结构给出修复方案。`;
-  const raw = await ask(model, FIX_PROPOSALS_SYSTEM_PROMPT, user, token);
+  const raw = await ask(model, FIX_PROPOSALS_SYSTEM_PROMPT, user, token, { op: 'fix' });
   const parsed = parseJson<{ proposals?: unknown[] }>(raw);
   const list = Array.isArray(parsed.proposals) ? parsed.proposals : [];
   const out: FixProposal[] = [];

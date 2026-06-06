@@ -3,7 +3,8 @@ import * as path from 'node:path';
 import { m } from '../i18n';
 import type { ReviewSet } from '../scope/types';
 import type { Finding, GlobalReport } from '../ai/types';
-import type { PerFileState, ReviewKey, ReviewSnapshot, ReviewStore, Annotation, ReviewConclusion, FindingDisposition } from './reviewStore';
+import type { TokenUsage } from '../ai/analyzer';
+import type { PerFileState, ReviewKey, ReviewSnapshot, ReviewStore, Annotation, ReviewConclusion, FindingDisposition, TokenAccount } from './reviewStore';
 
 /**
  * Holds the in-memory state of the active review and persists it through a
@@ -337,6 +338,38 @@ export class ReviewSession {
 
   get conclusion(): ReviewConclusion | undefined {
     return this.snapshot?.conclusion;
+  }
+
+  /**
+   * Accumulates one LLM call's estimated token usage onto the review snapshot,
+   * bucketed by operation. Totals are approximate (countTokens-based), not the
+   * provider's billed counts. Persisted so usage survives reloads.
+   */
+  recordTokenUsage(usage: TokenUsage): void {
+    if (!this.snapshot) {
+      return;
+    }
+    const acct = this.snapshot.tokenUsage ?? {
+      totalInput: 0,
+      totalOutput: 0,
+      calls: 0,
+      byOp: {},
+    };
+    acct.totalInput += usage.input;
+    acct.totalOutput += usage.output;
+    acct.calls += 1;
+    const bucket = acct.byOp[usage.op] ?? { input: 0, output: 0, calls: 0 };
+    bucket.input += usage.input;
+    bucket.output += usage.output;
+    bucket.calls += 1;
+    acct.byOp[usage.op] = bucket;
+    this.snapshot.tokenUsage = acct;
+    void this.persist();
+  }
+
+  /** Estimated token usage accumulated over this review, if any. */
+  get tokenUsage(): TokenAccount | undefined {
+    return this.snapshot?.tokenUsage;
   }
 
   allFilesReady(): boolean {
