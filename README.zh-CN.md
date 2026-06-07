@@ -2,11 +2,15 @@
 
 > 不信任驱动的代码审查：**每一行都必须被看过**。把 “Review = 不信任” 做成硬门禁——逐行通读 + 文件级 AI 分析 + 逐条处置每个问题 + 跨文件全局分析，全部完成才允许给出审查结论。
 
-`v0.0.50` · VS Code 扩展 · 由 GitHub CLI 与 Copilot 模型驱动
+[![VS Marketplace Version](https://img.shields.io/visual-studio-marketplace/v/codereview-dev.codereview?label=Marketplace&color=blue)](https://marketplace.visualstudio.com/items?itemName=codereview-dev.codereview)
+[![Installs](https://img.shields.io/visual-studio-marketplace/i/codereview-dev.codereview)](https://marketplace.visualstudio.com/items?itemName=codereview-dev.codereview)
+[![Rating](https://img.shields.io/visual-studio-marketplace/r/codereview-dev.codereview)](https://marketplace.visualstudio.com/items?itemName=codereview-dev.codereview)
+
+VS Code 扩展 · 由 GitHub CLI 与 Copilot 模型驱动
 
 [English](README.md) | 简体中文
 
-<img src="docs/images/workbench-zh.png" width="820" alt="代码审查工作台" />
+<img src="https://raw.githubusercontent.com/changjian-wang/codereview/main/docs/images/workbench-zh.png" width="820" alt="代码审查工作台" />
 
 ## 核心理念
 

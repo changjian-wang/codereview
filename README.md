@@ -2,11 +2,15 @@
 
 > Distrust-driven code review: **every line must be looked at**. "Review = distrust" turned into a hard gate — read line-by-line + file-level AI analysis + dispose of every finding + cross-file global analysis. Only when all of that is done are you allowed to submit a conclusion.
 
-`v0.0.50` · VS Code extension · powered by the GitHub CLI and Copilot models
+[![VS Marketplace Version](https://img.shields.io/visual-studio-marketplace/v/codereview-dev.codereview?label=Marketplace&color=blue)](https://marketplace.visualstudio.com/items?itemName=codereview-dev.codereview)
+[![Installs](https://img.shields.io/visual-studio-marketplace/i/codereview-dev.codereview)](https://marketplace.visualstudio.com/items?itemName=codereview-dev.codereview)
+[![Rating](https://img.shields.io/visual-studio-marketplace/r/codereview-dev.codereview)](https://marketplace.visualstudio.com/items?itemName=codereview-dev.codereview)
+
+VS Code extension · powered by the GitHub CLI and Copilot models
 
 English | [简体中文](README.zh-CN.md)
 
-<img src="docs/images/workbench-en.png" width="820" alt="Code Review Workbench" />
+<img src="https://raw.githubusercontent.com/changjian-wang/codereview/main/docs/images/workbench-en.png" width="820" alt="Code Review Workbench" />
 
 ## Core ideas
 
