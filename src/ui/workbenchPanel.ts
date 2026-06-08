@@ -87,6 +87,7 @@ interface FilePatch {
   path: string;
   active: boolean;
   ready: boolean;
+  fullySeen: boolean;
   dotClass: 'done' | 'analyzing' | 'partial' | 'none';
   dotTitle: string;
   unconfirmed: number;
@@ -514,7 +515,13 @@ export class WorkbenchPanel {
     color:var(--dim); flex-shrink:0; }
 
   .tnode.active { background:var(--purple-bg); box-shadow:inset 2px 0 0 var(--purple); }
-  .tnode.ready { opacity:.72; }
+  /* Unread files (default) stay dim; a fully-seen file gets full-strength text
+     plus a green left bar so read vs. unread is obvious at a glance. */
+  .tnode .tname { color:var(--dim); }
+  .tnode.seen { box-shadow:inset 2px 0 0 var(--green); }
+  .tnode.seen .tname { color:var(--vscode-foreground); }
+  /* active wins the left bar (purple) over the green seen bar */
+  .tnode.active.seen { box-shadow:inset 2px 0 0 var(--purple); }
   .seen-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
   .seen-dot.none { background:transparent; border:1.5px solid var(--vscode-charts-orange, #d89614); }
   .seen-dot.partial { background:var(--yellow); }
@@ -527,6 +534,7 @@ export class WorkbenchPanel {
     70% { box-shadow:0 0 0 5px rgba(55,148,255,0); }
     100% { box-shadow:0 0 0 0 rgba(55,148,255,0); }
   }
+  /* Fully read AND all findings handled: name turns green (done), not dimmed. */
   .tnode.ready .tname { color:var(--green); }
   .tname { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .chg { font-family:var(--vscode-editor-font-family); font-size:.7rem; padding:0 .3rem; border-radius:4px; flex-shrink:0; }
@@ -725,7 +733,7 @@ export class WorkbenchPanel {
       ? '<span class="fix-flag" title="' + esc(fmt(T.unconfirmedTitle, row.unconfirmed)) + '">' + row.unconfirmed + '</span>'
       : (row.analyzed && row.findings === 0 ? '<span class="ok-flag" title="' + esc(T.noFindings) + '">\u2713</span>' : '');
     const cov = row.total > 0 ? (row.seen + '/' + row.total) : '\u2014';
-    return '<div class="trow tnode' + (row.active ? ' active' : '') + (row.ready ? ' ready' : '') + '" data-kind="file" data-path="' + esc(row.path) + '" style="top:' + top + 'px; padding-left:' + indent + 'px">'
+    return '<div class="trow tnode' + (row.active ? ' active' : '') + (row.ready ? ' ready' : '') + (row.fullySeen ? ' seen' : '') + '" data-kind="file" data-path="' + esc(row.path) + '" style="top:' + top + 'px; padding-left:' + indent + 'px">'
       + '<span class="seen-dot ' + dotClass + '" title="' + esc(dotTitle) + '"></span>'
       + '<span class="tname" title="' + esc(row.path) + '">' + esc(row.name) + '</span>'
       + chg + fix
@@ -888,7 +896,7 @@ export class WorkbenchPanel {
       if (!r || r.kind !== 'file') return;
       r.active = p.active; r.ready = p.ready; r.dotClass = p.dotClass; r.dotTitle = p.dotTitle;
       r.unconfirmed = p.unconfirmed; r.analyzed = p.analyzed; r.findings = p.findings;
-      r.seen = p.seen; r.total = p.total; r.analyzing = p.analyzing;
+      r.seen = p.seen; r.total = p.total; r.analyzing = p.analyzing; r.fullySeen = p.fullySeen;
     });
     (msg.folders || []).forEach((p) => {
       const r = rowByPath.get(p.path);
@@ -1097,6 +1105,7 @@ interface TreeRow {
   seen?: number;
   total?: number;
   ready?: boolean;
+  fullySeen?: boolean;
   active?: boolean;
   analyzing?: boolean;
   readyCount?: number;
@@ -1128,6 +1137,7 @@ function flattenRows(root: TreeNode): TreeRow[] {
           seen: p.seen,
           total: p.total,
           ready: p.ready,
+          fullySeen: p.fullySeen,
           active: child.file.active,
           analyzing: p.analyzing,
         });
@@ -1181,6 +1191,7 @@ function filePatchOf(file: WorkbenchFile): FilePatch {
     path: file.path,
     active: file.active,
     ready: file.ready,
+    fullySeen: file.fullySeen,
     dotClass: file.ready
       ? 'done'
       : file.fullySeen
@@ -1227,6 +1238,7 @@ function sameFilePatch(a: FilePatch, b: FilePatch): boolean {
   return a.path === b.path
     && a.active === b.active
     && a.ready === b.ready
+    && a.fullySeen === b.fullySeen
     && a.dotClass === b.dotClass
     && a.dotTitle === b.dotTitle
     && a.unconfirmed === b.unconfirmed
