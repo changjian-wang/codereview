@@ -287,6 +287,8 @@ export const en = {
     translate: 'Translate',
     explain: 'Explain',
     note: 'Note',
+    explainingInline: 'Explaining…',
+    translatingInline: 'Translating…',
     toggleTitle: 'Click to expand / collapse',
     line: 'Line {0}',
     suggestionPrefix: 'Suggestion: ',

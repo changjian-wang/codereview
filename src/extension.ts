@@ -1057,6 +1057,7 @@ async function annotateWithTranslation(
 ): Promise<void> {
   const model = await models.resolve();
   if (!model) {
+    DocumentPanel.setAiBusy(path, false);
     void vscode.window.showErrorMessage(m().model.noModel);
     return;
   }
@@ -1078,6 +1079,8 @@ async function annotateWithTranslation(
         refreshDocPanel(path);
       } catch (err) {
         reportError(err);
+      } finally {
+        DocumentPanel.setAiBusy(path, false);
       }
     },
   );
@@ -1092,6 +1095,7 @@ async function annotateWithExplanation(
 ): Promise<void> {
   const model = await models.resolve();
   if (!model) {
+    DocumentPanel.setAiBusy(path, false);
     void vscode.window.showErrorMessage(m().model.noModel);
     return;
   }
@@ -1113,6 +1117,8 @@ async function annotateWithExplanation(
         refreshDocPanel(path);
       } catch (err) {
         reportError(err);
+      } finally {
+        DocumentPanel.setAiBusy(path, false);
       }
     },
   );

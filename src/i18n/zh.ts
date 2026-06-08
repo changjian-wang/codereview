@@ -255,6 +255,8 @@ export const zh: Messages = {
     translate: '翻译',
     explain: '解释',
     note: '批注',
+    explainingInline: '正在解释…',
+    translatingInline: '正在翻译…',
     toggleTitle: '点击展开 / 收起',
     line: '第 {0} 行',
     suggestionPrefix: '建议：',

@@ -172,6 +172,18 @@ export class DocumentPanel {
     }
   }
 
+  /**
+   * Toggles the in-place "calling the model" bubble for translate / explain on
+   * the panel showing `path`. Used to clear the bubble when the call finishes
+   * (success arrives via a reload; errors clear it explicitly).
+   */
+  static setAiBusy(path: string, on: boolean): void {
+    const inst = DocumentPanel.current;
+    if (inst?.ready && inst.model?.path === path) {
+      void inst.panel.webview.postMessage({ type: 'aiBusy', on });
+    }
+  }
+
   private post(): void {
     if (this.model) {
       void this.panel.webview.postMessage({ type: 'load', model: this.model });
@@ -451,6 +463,18 @@ export class DocumentPanel {
     border-radius:8px; box-shadow:0 4px 16px rgba(0,0,0,.3);
   }
   .pop button { font-size:12px; }
+  .pop-busy {
+    position:fixed; z-index:51; display:none; align-items:center; gap:7px;
+    padding:6px 11px; font-size:12px; color:var(--vscode-foreground);
+    background:var(--vscode-editorWidget-background); border:1px solid var(--line);
+    border-radius:8px; box-shadow:0 4px 16px rgba(0,0,0,.3);
+  }
+  .pop-busy .spin {
+    width:12px; height:12px; flex:none; border-radius:50%;
+    border:2px solid color-mix(in srgb, var(--blue) 35%, transparent);
+    border-top-color:var(--blue); animation:popSpin .7s linear infinite;
+  }
+  @keyframes popSpin { to { transform:rotate(360deg); } }
   .hint { padding:6px 12px; color:var(--dim); font-size:11px; border-bottom:1px solid var(--line); background:rgba(197,134,192,.08); }
 </style>
 </head>
@@ -475,6 +499,7 @@ export class DocumentPanel {
     <button id="pop-explain">${t.explain}</button>
     <button id="pop-note">${t.note}</button>
   </div>
+  <div class="pop-busy" id="pop-busy"><span class="spin"></span><span id="pop-busy-label"></span></div>
 <script nonce="${nonce}">
 const vscode = acquireVsCodeApi();
 const T = ${JSON.stringify(t)};
@@ -887,9 +912,22 @@ function captureSelection() {
 }
 
 contentEl.addEventListener('mouseup', () => setTimeout(captureSelection, 0));
-$('pop-tr').addEventListener('click', () => { if (pendingSel) { vscode.postMessage({ type:'translate', startLine:pendingSel.startLine, endLine:pendingSel.endLine, text:pendingSel.text }); pop.style.display='none'; } });
-$('pop-explain').addEventListener('click', () => { if (pendingSel) { vscode.postMessage({ type:'explain', startLine:pendingSel.startLine, endLine:pendingSel.endLine, text:pendingSel.text }); pop.style.display='none'; } });
+$('pop-tr').addEventListener('click', () => { if (pendingSel) { showAiBusy(T.translatingInline); vscode.postMessage({ type:'translate', startLine:pendingSel.startLine, endLine:pendingSel.endLine, text:pendingSel.text }); pop.style.display='none'; } });
+$('pop-explain').addEventListener('click', () => { if (pendingSel) { showAiBusy(T.explainingInline); vscode.postMessage({ type:'explain', startLine:pendingSel.startLine, endLine:pendingSel.endLine, text:pendingSel.text }); pop.style.display='none'; } });
 $('pop-note').addEventListener('click', () => { if (pendingSel) { vscode.postMessage({ type:'note', startLine:pendingSel.startLine, endLine:pendingSel.endLine, text:pendingSel.text }); pop.style.display='none'; } });
+
+// In-place "calling the model" feedback for translate / explain, anchored where
+// the selection popover was, so the user sees work is happening without hunting
+// for a parent-window notification.
+const popBusy = $('pop-busy');
+function showAiBusy(label) {
+  const lbl = $('pop-busy-label');
+  if (lbl) lbl.textContent = label || '';
+  popBusy.style.left = pop.style.left || '50%';
+  popBusy.style.top = pop.style.top || '50%';
+  popBusy.style.display = 'flex';
+}
+function hideAiBusy() { popBusy.style.display = 'none'; }
 
 // Toolbar -----------------------------------------------------------------
 $('m-read').addEventListener('click', () => setMode('reading'));
@@ -931,7 +969,8 @@ function setAnalyzing(on, ok, silent) {
 
 window.addEventListener('message', (ev) => {
   const msg = ev.data;
-  if (msg.type === 'load') { model = msg.model; render(); }
+  if (msg.type === 'load') { hideAiBusy(); model = msg.model; render(); }
+  else if (msg.type === 'aiBusy') { if (!msg.on) hideAiBusy(); }
   else if (msg.type === 'analyzing') { setAnalyzing(msg.on, msg.ok); }
   else if (msg.type === 'scrollTo') {
     if (mode !== 'source') setMode('source');
