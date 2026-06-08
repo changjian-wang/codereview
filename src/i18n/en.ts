@@ -74,6 +74,7 @@ export const en = {
     explaining: 'Code Review: explaining…',
     reuseExplanation: 'Already explained — showing the saved result (delete it to regenerate)',
     reuseTranslation: 'Already translated — showing the saved result (delete it to regenerate)',
+    convertedToNote: 'Converted to a note — click Edit to modify it',
     pickFileToAnalyze: 'Pick a file to analyze in the workbench first',
     pickFile: 'Pick a file in the workbench first',
     deletedFileHandled: (rel: string) =>
@@ -307,6 +308,10 @@ export const en = {
     annoExplain: 'Explanation',
     annoNote: 'Note',
     regenerate: 'Regenerate',
+    convertToNote: 'Convert to note',
+    editNote: 'Edit',
+    saveEdit: 'Save',
+    cancelEdit: 'Cancel',
     delete: 'Delete',
     otherFindings: 'Other findings',
     unlocatedAnnotations: 'Unlocated annotations',

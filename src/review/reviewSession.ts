@@ -304,6 +304,28 @@ export class ReviewSession {
     }
   }
 
+  /**
+   * Updates an annotation in place (content edit and/or kind change, e.g.
+   * converting an AI explanation into an editable note). No-op if not found.
+   */
+  updateAnnotation(
+    path: string,
+    id: string,
+    patch: { content?: string; kind?: Annotation['kind'] },
+  ): void {
+    const a = this.fileState(path)?.annotations?.find((x) => x.id === id);
+    if (!a) {
+      return;
+    }
+    if (typeof patch.content === 'string') {
+      a.content = patch.content;
+    }
+    if (patch.kind) {
+      a.kind = patch.kind;
+    }
+    void this.persist();
+  }
+
   /** Stores the cross-file global report (reviewer must still confirm it). */
   setGlobalReport(report: GlobalReport): void {
     if (this.snapshot) {

@@ -53,6 +53,10 @@ export interface DocActions {
   removeAnnotation(path: string, id: string): void;
   /** Re-runs the model for an AI annotation (translate/explain), replacing it. */
   regenerateAnnotation(path: string, id: string): void;
+  /** Converts an AI annotation (translate/explain) into an editable note. */
+  convertAnnotationToNote(path: string, id: string): void;
+  /** Saves an edited note's content. */
+  editAnnotation(path: string, id: string, content: string): void;
   disposeFinding(path: string, id: string, kind: DocFindingDisposition): void;
   /** Opens the fix-proposal panel for a finding to *view* it, without changing its disposition. */
   viewFix(path: string, id: string): void;
@@ -69,6 +73,8 @@ type Inbound =
   | { type: 'note'; startLine: number; endLine: number; text: string }
   | { type: 'removeAnnotation'; id: string }
   | { type: 'regenerateAnnotation'; id: string }
+  | { type: 'convertToNote'; id: string }
+  | { type: 'editAnnotation'; id: string; content: string }
   | { type: 'dispose'; id: string; kind: DocFindingDisposition }
   | { type: 'viewFix'; id: string }
   | { type: 'locate'; line: number; endLine?: number; id?: string }
@@ -220,6 +226,12 @@ export class DocumentPanel {
         break;
       case 'regenerateAnnotation':
         this.actions.regenerateAnnotation(path, m.id);
+        break;
+      case 'convertToNote':
+        this.actions.convertAnnotationToNote(path, m.id);
+        break;
+      case 'editAnnotation':
+        this.actions.editAnnotation(path, m.id, m.content);
         break;
       case 'dispose':
         this.actions.disposeFinding(path, m.id, m.kind);
@@ -417,10 +429,23 @@ export class DocumentPanel {
   .anno-head { display:flex; align-items:center; gap:8px; padding:6px 10px; cursor:pointer; }
   .anno-kind { color:var(--purple); font-weight:600; }
   .anno-where { color:var(--dim); font-size:11px; }
-  .anno-regen { margin-left:auto; opacity:.6; padding:0 6px; }
+  .anno-regen, .anno-tonote, .anno-edit, .anno-x { margin-left:auto; opacity:.6; padding:0 6px; cursor:pointer; }
+  .anno-regen ~ .anno-tonote, .anno-regen ~ .anno-edit, .anno-regen ~ .anno-x,
+  .anno-tonote ~ .anno-x, .anno-edit ~ .anno-x { margin-left:0; }
   .anno-regen:hover { opacity:1; color:var(--blue); }
-  .anno-x { margin-left:auto; opacity:.6; padding:0 6px; }
+  .anno-tonote:hover, .anno-edit:hover { opacity:1; }
   .anno-x:hover { opacity:1; color:var(--red); }
+  .anno-editbox { padding:0 10px 10px; }
+  .anno-edit-ta {
+    width:100%; box-sizing:border-box; min-height:88px; resize:vertical;
+    font-family:inherit; font-size:13px; line-height:1.6; padding:7px 9px;
+    color:var(--vscode-input-foreground); background:var(--vscode-input-background);
+    border:1px solid var(--vscode-input-border, var(--line)); border-radius:6px; outline:none;
+  }
+  .anno-edit-ta:focus { border-color:var(--vscode-focusBorder, var(--blue)); }
+  .anno-editbar { display:flex; justify-content:flex-end; gap:6px; margin-top:6px; }
+  .anno-editbar button { font-family:inherit; font-size:12px; padding:4px 12px; cursor:pointer; border-radius:5px; border:1px solid var(--line); background:var(--vscode-button-secondaryBackground); color:var(--vscode-button-secondaryForeground); }
+  .anno-editbar button.primary { background:var(--vscode-button-background); color:var(--vscode-button-foreground); border-color:transparent; }
   .anno-body { padding:0 10px 10px; line-height:1.6; white-space:pre-wrap; }
   .anno.collapsed .anno-body { display:none; }
   .anno.anno-explain { border-left-color:var(--green); }
@@ -619,14 +644,58 @@ function annoCard(a) {
     '<div class="anno-head"><span class="anno-kind">' + kind + '</span>' +
     '<span class="anno-where">' + where + '</span>' +
     (isAi ? '<span class="anno-regen" title="' + T.regenerate + '">⟳</span>' : '') +
+    (isAi ? '<span class="anno-tonote" title="' + T.convertToNote + '">📝</span>' : '<span class="anno-edit" title="' + T.editNote + '">✎</span>') +
     '<span class="anno-x" title="' + T.delete + '">✕</span></div>' +
     '<div class="anno-body"></div>';
-  div.querySelector('.anno-body').textContent = a.content;
+  const body = div.querySelector('.anno-body');
+  body.textContent = a.content;
+
+  function beginEdit() {
+    if (div.querySelector('.anno-editbox')) return;
+    div.classList.remove('collapsed');
+    body.innerHTML = '';
+    const box = document.createElement('div');
+    box.className = 'anno-editbox';
+    const ta = document.createElement('textarea');
+    ta.className = 'anno-edit-ta';
+    ta.value = a.content;
+    const bar = document.createElement('div');
+    bar.className = 'anno-editbar';
+    const save = document.createElement('button');
+    save.className = 'primary';
+    save.textContent = T.saveEdit;
+    const cancel = document.createElement('button');
+    cancel.textContent = T.cancelEdit;
+    bar.appendChild(save);
+    bar.appendChild(cancel);
+    box.appendChild(ta);
+    box.appendChild(bar);
+    body.innerHTML = '';
+    body.appendChild(box);
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+    save.addEventListener('click', () => {
+      const v = ta.value;
+      a.content = v;
+      vscode.postMessage({ type:'editAnnotation', id:a.id, content:v });
+      body.textContent = v; // optimistic; a refresh will follow
+    });
+    cancel.addEventListener('click', () => { body.textContent = a.content; });
+    ta.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') { body.textContent = a.content; }
+      else if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) { save.click(); }
+    });
+  }
+
   div.querySelector('.anno-head').addEventListener('click', (e) => {
     if (e.target.classList.contains('anno-x')) {
       vscode.postMessage({ type:'removeAnnotation', id:a.id });
     } else if (e.target.classList.contains('anno-regen')) {
       vscode.postMessage({ type:'regenerateAnnotation', id:a.id });
+    } else if (e.target.classList.contains('anno-tonote')) {
+      vscode.postMessage({ type:'convertToNote', id:a.id });
+    } else if (e.target.classList.contains('anno-edit')) {
+      beginEdit();
     } else {
       div.classList.toggle('collapsed');
     }

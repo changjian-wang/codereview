@@ -1034,6 +1034,15 @@ function docActions() {
       refreshDocPanel(path);
     },
     regenerateAnnotation: (path: string, id: string) => void regenerateAnnotation(path, id),
+    convertAnnotationToNote: (path: string, id: string) => {
+      session.updateAnnotation(path, id, { kind: 'note' });
+      refreshDocPanel(path);
+      transientInfo(m().analysis.convertedToNote);
+    },
+    editAnnotation: (path: string, id: string, content: string) => {
+      session.updateAnnotation(path, id, { content });
+      refreshDocPanel(path);
+    },
     disposeFinding: (path: string, id: string, kind: FindingDispositionKind) => {
       void disposeFinding(path, id, kind);
     },
