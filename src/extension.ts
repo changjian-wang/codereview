@@ -22,6 +22,7 @@ import { FileSystemScope } from './scope/scopes';
 import type { ReviewScope, ReviewSet } from './scope/types';
 import { submitPrReview, postPrLineComment, postPrComment } from './gh/ghClient';
 import { GlobalReportPanel } from './ui/globalReportPanel';
+import { buildReviewReportMarkdown, type ReportData } from './ui/reviewReport';
 import { runWithProgress } from './ui/progressSteps';
 import { WorkbenchPanel, type WorkbenchState, type WorkbenchFile, type FindingDispositionKind } from './ui/workbenchPanel';
 import { DocumentPanel, type DocModel } from './ui/documentPanel';
@@ -548,6 +549,7 @@ function workbenchActions(): import('./ui/workbenchPanel').WorkbenchActions {
     globalAnalysis: () => void runGlobalAnalysis(),
     cancelGlobalAnalysis: () => cancelGlobalAnalysis(),
     showGlobal: showGlobalReport,
+    exportReport: () => void exportReviewReport(),
     submit: () => void submitConclusion(),
     pickModel: () => void selectModel(),
     pickLanguage: () => void selectLanguage(),
@@ -1731,6 +1733,39 @@ function showGlobalReport(): void {
     },
     () => void vscode.commands.executeCommand('codereview.openWorkbench'),
   );
+}
+
+/** Builds a Markdown review report from the session and opens it as a new document. */
+async function exportReviewReport(): Promise<void> {
+  const reviewSet = session.reviewSet;
+  if (!reviewSet) {
+    transientWarning(m().report.noReview);
+    return;
+  }
+  const cov = session.totalCoverage();
+  const data: ReportData = {
+    repo: session.getRepoName(),
+    scopeLabel: reviewSet.label,
+    generatedAt: Date.now(),
+    coverage: {
+      seen: cov.seen,
+      total: cov.total,
+      filesReady: cov.filesReady,
+      filesTotal: cov.filesTotal,
+    },
+    files: reviewSet.files.map((f) => ({
+      path: f.path,
+      findings: session.findings(f.path),
+      disposition: (findingId: string) => session.findingDisposition(f.path, findingId),
+      annotations: session.annotations(f.path),
+    })),
+    globalReport: session.globalReport,
+    conclusion: session.conclusion,
+  };
+  const markdown = buildReviewReportMarkdown(data, m().report);
+  const doc = await vscode.workspace.openTextDocument({ language: 'markdown', content: markdown });
+  await vscode.window.showTextDocument(doc, { preview: false, viewColumn: vscode.ViewColumn.Active });
+  transientInfo(m().report.exported);
 }
 
 /** Generates a candidate unified diff for a fix spot and opens it in an editor. */

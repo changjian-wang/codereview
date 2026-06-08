@@ -75,6 +75,8 @@ export interface WorkbenchActions {
   globalAnalysis(): void;
   cancelGlobalAnalysis(): void;
   showGlobal(): void;
+  /** Exports the whole review as a Markdown report document. */
+  exportReport(): void;
   submit(): void;
   pickModel(): void;
   /** Opens the language picker (UI + LLM output language). */
@@ -88,7 +90,7 @@ interface FilePatch {
   active: boolean;
   ready: boolean;
   fullySeen: boolean;
-  dotClass: 'done' | 'analyzing' | 'partial' | 'none';
+  dotClass: 'done' | 'reviewed' | 'analyzing' | 'partial' | 'none';
   dotTitle: string;
   unconfirmed: number;
   analyzed: boolean;
@@ -125,6 +127,7 @@ type InboundMessage =
   | { type: 'global' }
   | { type: 'cancelGlobal' }
   | { type: 'showGlobal' }
+  | { type: 'exportReport' }
   | { type: 'submit' }
   | { type: 'pickModel' }
   | { type: 'pickLanguage' }
@@ -382,6 +385,9 @@ export class WorkbenchPanel {
       case 'showGlobal':
         this.actions.showGlobal();
         break;
+      case 'exportReport':
+        this.actions.exportReport();
+        break;
       case 'submit':
         this.actions.submit();
         break;
@@ -525,6 +531,7 @@ export class WorkbenchPanel {
   .seen-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
   .seen-dot.none { background:transparent; border:1.5px solid var(--vscode-charts-orange, #d89614); }
   .seen-dot.partial { background:var(--yellow); }
+  .seen-dot.reviewed { background:transparent; border:1.5px solid var(--green); }
   .seen-dot.analyzing { background:var(--vscode-charts-blue, #3794ff); }
   .seen-dot.done { background:var(--green); }
   .seen-dot.working { background:var(--vscode-charts-blue, #3794ff);
@@ -612,6 +619,9 @@ export class WorkbenchPanel {
         <div class="row">
           <button id="global">${esc(t.globalAnalysis)}</button>
           <button id="showGlobal" ${state.hasGlobalReport ? '' : 'disabled'}>${esc(t.viewGlobal)}</button>
+        </div>
+        <div class="row">
+          <button id="exportReport">${esc(t.exportReport)}</button>
         </div>
         <div class="global-prog" id="globalProg" hidden>
           <div class="gp-bar"><div class="gp-fill"></div></div>
@@ -866,6 +876,7 @@ export class WorkbenchPanel {
   });
   byId('globalCancel')?.addEventListener('click', () => send({ type:'cancelGlobal' }));
   byId('showGlobal')?.addEventListener('click', () => send({ type:'showGlobal' }));
+  byId('exportReport')?.addEventListener('click', () => send({ type:'exportReport' }));
   byId('pickModel')?.addEventListener('click', () => send({ type:'pickModel' }));
   byId('pickLanguage')?.addEventListener('click', () => send({ type:'pickLanguage' }));
   byId('pickScope')?.addEventListener('click', () => send({ type:'pickScope' }));
@@ -1096,7 +1107,7 @@ interface TreeRow {
   path: string;
   name: string;
   depth: number;
-  dotClass: 'done' | 'analyzing' | 'partial' | 'none';
+  dotClass: 'done' | 'reviewed' | 'analyzing' | 'partial' | 'none';
   dotTitle?: string;
   change?: 'add' | 'del' | 'role';
   unconfirmed?: number;
@@ -1195,7 +1206,7 @@ function filePatchOf(file: WorkbenchFile): FilePatch {
     dotClass: file.ready
       ? 'done'
       : file.fullySeen
-        ? 'analyzing'
+        ? 'reviewed'
         : file.seen > 0
           ? 'partial'
           : 'none',
