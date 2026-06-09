@@ -6,6 +6,7 @@ import type {
 import { transientInfo } from './toast';
 import { esc, escAttr, nonce as makeNonce } from './html';
 import { m, resolveLanguage } from '../i18n';
+import { DocumentPanel } from './documentPanel';
 
 const SEVERITY_ORDER: FindingSeverity[] = ['bug', 'conditional', 'suggestion'];
 
@@ -83,9 +84,10 @@ export class GlobalReportPanel {
     onGotoFiles?: () => void,
     fixDisposed?: (spotId: string, file: string, line: number) => boolean,
   ): GlobalReportPanel {
-    // Open beside the workbench, in the SAME window the workbench lives in (it
-    // may be an auxiliary window), so the report never lands on the parent.
-    const column = vscode.ViewColumn.Active;
+    // Open as a TAB in the SAME group as the code (document) view, so the report
+    // and the file are tabs you switch between — not a split that has to be
+    // resized. Falls back to the active column when no document is open.
+    const column = DocumentPanel.viewColumn ?? vscode.ViewColumn.Active;
     if (GlobalReportPanel.current) {
       const existing = GlobalReportPanel.current;
       existing.onLocate = onLocate;

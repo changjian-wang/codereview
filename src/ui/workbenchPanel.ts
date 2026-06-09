@@ -223,6 +223,12 @@ export class WorkbenchPanel {
     return !!WorkbenchPanel.current;
   }
 
+  /** The editor column the workbench currently occupies, if open. Used to
+   * anchor companion panels (e.g. the scope picker) to the same window. */
+  static get viewColumn(): vscode.ViewColumn | undefined {
+    return WorkbenchPanel.current?.panel.viewColumn;
+  }
+
   /** Re-renders the panel from current session state, if open. */
   static refreshIfOpen(): void {
     WorkbenchPanel.current?.scheduleRefresh();

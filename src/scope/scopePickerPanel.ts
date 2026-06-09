@@ -8,6 +8,12 @@ export interface ScopeTreeOptions {
   rootLabel: string;
   /** Every reviewable file under the root, as root-relative POSIX paths. */
   relPaths: string[];
+  /**
+   * Editor column to open in. Pass the workbench's own column so the picker
+   * opens in the SAME window — otherwise ViewColumn.Active can land it in the
+   * parent window when the workbench lives in an auxiliary window.
+   */
+  viewColumn?: vscode.ViewColumn;
 }
 
 /**
@@ -22,7 +28,7 @@ export function pickScopeTree(opts: ScopeTreeOptions): Promise<string[] | undefi
     const panel = vscode.window.createWebviewPanel(
       'codereview.scopePicker',
       m().scopePanel.title,
-      vscode.ViewColumn.Active,
+      opts.viewColumn ?? vscode.ViewColumn.Active,
       { enableScripts: true, retainContextWhenHidden: true },
     );
 
@@ -224,11 +230,13 @@ function renderHtml(opts: ScopeTreeOptions): string {
           for (const a of ancestors(p)) show.add(a);
         }
       }
+      // While filtering, only matching nodes are shown, but folding still works:
+      // a directory's children are hidden when the user has collapsed it.
       const walk = (node, depth) => {
         for (const c of node.children.values()) {
           if (!show.has(c.path)) continue;
           rows.push({ node: c, depth });
-          if (c.kind === 'dir') walk(c, depth + 1);
+          if (c.kind === 'dir' && expanded.has(c.path)) walk(c, depth + 1);
         }
       };
       walk(root, 0);
@@ -244,13 +252,22 @@ function renderHtml(opts: ScopeTreeOptions): string {
     return rows;
   }
 
+  /** Files currently visible given the filter (used by 全选). */
+  function visibleFiles() {
+    if (!filterText) {
+      return DATA.slice();
+    }
+    const q = filterText.toLowerCase();
+    return DATA.filter((p) => p.toLowerCase().indexOf(q) !== -1);
+  }
+
   function rowHtml(r) {
     const n = r.node;
     const pad = 8 + r.depth * 16;
     const isDir = n.kind === 'dir';
     let caret = '';
     if (isDir) {
-      caret = filterText ? '▾' : (expanded.has(n.path) ? '▾' : '▸');
+      caret = expanded.has(n.path) ? '▾' : '▸';
     }
     let count = '';
     if (isDir) {
@@ -315,13 +332,26 @@ function renderHtml(opts: ScopeTreeOptions): string {
     const row = e.target.closest ? e.target.closest('.row') : null;
     if (!row || row.getAttribute('data-kind') !== 'dir') return;
     const p = decodeURIComponent(row.getAttribute('data-path'));
-    if (filterText) return; // expansion is implicit while filtering
     if (expanded.has(p)) expanded.delete(p); else expanded.add(p);
     render();
   });
 
-  $('filter').addEventListener('input', (e) => { filterText = e.target.value.trim(); treeEl.scrollTop = 0; render(); });
-  $('btnSelAll').addEventListener('click', () => { for (const p of DATA) setFile(p, true); render(); });
+  $('filter').addEventListener('input', (e) => {
+    filterText = e.target.value.trim();
+    // Auto-expand the ancestor chain of every match so results are visible by
+    // default; the user can still collapse any directory afterwards.
+    if (filterText) {
+      const q = filterText.toLowerCase();
+      for (const path of DATA) {
+        if (path.toLowerCase().indexOf(q) !== -1) {
+          for (const a of ancestors(path)) expanded.add(a);
+        }
+      }
+    }
+    treeEl.scrollTop = 0;
+    render();
+  });
+  $('btnSelAll').addEventListener('click', () => { for (const p of visibleFiles()) setFile(p, true); render(); });
   $('btnClear').addEventListener('click', () => { selected.clear(); dirSel.clear(); render(); });
   $('btnCollapse').addEventListener('click', () => { expanded.clear(); render(); });
   $('btnCancel').addEventListener('click', () => vscode.postMessage({ type: 'cancel' }));

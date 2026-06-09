@@ -426,7 +426,7 @@ async function startReview(): Promise<void> {
     return;
   }
 
-  const picked = await pickScope(defaultCwd);
+  const picked = await pickScope(defaultCwd, WorkbenchPanel.viewColumn);
   if (!picked) {
     return;
   }

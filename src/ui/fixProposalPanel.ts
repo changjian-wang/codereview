@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import type { FixEdit, FixProposal } from '../ai/analyzer';
 import { escAttr as escapeHtml, nonce as makeNonce } from './html';
 import { m, fmt, resolveLanguage } from '../i18n';
+import { DocumentPanel } from './documentPanel';
 
 /** Inputs needed to drive the panel. */
 export interface FixProposalRequest {
@@ -96,7 +97,10 @@ export class FixProposalPanel {
     const panel = vscode.window.createWebviewPanel(
       'codereview.fixProposal',
       title,
-      { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false },
+      // Open in a stable column to the RIGHT of the code view, so the layout is
+      // always workbench | code | fix-proposal — not wherever 「Beside」 lands
+      // relative to whatever tab happened to be active.
+      { viewColumn: fixProposalColumn(), preserveFocus: false },
       { enableScripts: true, retainContextWhenHidden: true },
     );
     FixProposalPanel.instance = new FixProposalPanel(panel, request);
@@ -776,6 +780,19 @@ function normaliseCached(
     edits = [{ oldText: p.oldText, newText: typeof p.newText === 'string' ? p.newText : '' }];
   }
   return { title: p.title, rationale: p.rationale, edits, applied: p.applied };
+}
+
+/**
+ * Chooses a stable editor column for the fix-proposal panel: the column right of
+ * the document (code) view, so the layout is consistently workbench | code | fix.
+ * Falls back to Beside when the document view's column is unknown.
+ */
+function fixProposalColumn(): vscode.ViewColumn {
+  const docCol = DocumentPanel.viewColumn;
+  if (typeof docCol === 'number') {
+    return (docCol + 1) as vscode.ViewColumn;
+  }
+  return vscode.ViewColumn.Beside;
 }
 
 /**

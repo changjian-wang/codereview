@@ -146,6 +146,13 @@ export class DocumentPanel {
     return !!DocumentPanel.current;
   }
 
+  /** The editor column the document view occupies, if open. Lets companion
+   * panels (e.g. the global report) open as a TAB in the same group instead of
+   * splitting into a separate column. */
+  static get viewColumn(): vscode.ViewColumn | undefined {
+    return DocumentPanel.current?.panel.viewColumn;
+  }
+
   /**
    * Disposes the current document panel, if any. Used when the workbench moves
    * to another window so the next file opens beside it instead of being stranded
@@ -351,19 +358,10 @@ export class DocumentPanel {
   .topbar #act-analyze:hover {
     background:var(--vscode-button-hoverBackground, var(--vscode-button-background));
   }
-  /* analyze button: spinner + state transitions */
+  /* analyze button: state transitions (icon stays put; progress shown by the
+     bottom bar, not a spinner) */
   #act-analyze { display:inline-flex; align-items:center; gap:6px; }
-  #act-analyze .btn-spin {
-    width:0; height:11px; flex:none; border-radius:50%;
-    border:2px solid color-mix(in srgb, var(--vscode-button-foreground, #fff) 35%, transparent);
-    border-top-color:var(--vscode-button-foreground, #fff);
-    opacity:0; transform:scale(.4);
-    transition:width .15s ease, opacity .15s ease, transform .15s ease;
-  }
   #act-analyze.analyzing { cursor:progress; pointer-events:none; }
-  #act-analyze.analyzing .btn-spin {
-    width:11px; opacity:1; transform:scale(1); animation:cr-spin .7s linear infinite;
-  }
   #act-analyze.analyzing:hover { transform:none; box-shadow:none; }
   /* indeterminate progress bar along the button bottom while analyzing */
   #act-analyze { overflow:hidden; }
@@ -391,7 +389,6 @@ export class DocumentPanel {
     box-shadow:0 0 0 3px color-mix(in srgb, var(--green) 28%, transparent);
   }
   #act-analyze.done:hover { transform:none; }
-  @keyframes cr-spin { to { transform:rotate(360deg); } }
   /* keyboard-shortcut badge shown after a button label */
   .kbd {
     margin-left:7px; padding:0 5px; min-width:15px; height:15px; line-height:15px;
@@ -582,7 +579,7 @@ export class DocumentPanel {
       <button id="m-src">${t.sourceView}</button>
     </span>
     <button id="act-jump"><span class="ico">⤵</span>${t.jumpNextUnseen}</button>
-    <button id="act-analyze"><span class="btn-spin" aria-hidden="true"></span><span class="btn-label">${t.analyzeFile}</span><span class="kbd">A</span></button>
+    <button id="act-analyze"><span class="ico">🔬</span><span class="btn-label">${t.analyzeFile}</span><span class="kbd">A</span></button>
   </div>
   <div class="doc-notice" id="docNotice" hidden></div>
   <div class="findbar collapsed" id="findbar" style="display:none">
@@ -1140,10 +1137,27 @@ window.addEventListener('message', (ev) => {
     // Persistent highlight: stays lit until the next locate or a file switch.
     locatedRange = { start: start, end: end };
     applyLocateHighlight();
-    const first = contentEl.querySelector('.ln[data-line="' + start + '"]');
-    if (first) first.scrollIntoView({ block:'center' });
+    centerLine(start);
   }
 });
+
+/**
+ * Scrolls the source view so the 1-based line sits at the vertical center of the
+ * viewport. Uses the row's real offsetTop (not scrollIntoView, which mis-centers
+ * while later finding/annotation cards are still streaming in and the document
+ * height is still growing). Runs after a frame so layout is settled.
+ */
+function centerLine(line) {
+  const doIt = () => {
+    const row = contentEl.querySelector('.ln[data-line="' + line + '"]');
+    if (!row) return;
+    const target = row.offsetTop - (contentEl.clientHeight / 2) + (row.offsetHeight / 2);
+    contentEl.scrollTop = Math.max(0, target);
+  };
+  // Two rAFs: first lets pending DOM (mode switch, flushed chunk) commit, the
+  // second measures after layout so offsetTop is final.
+  requestAnimationFrame(() => requestAnimationFrame(doIt));
+}
 
 // ---- Keyboard navigation (LOCAL ONLY — never triggers a paid model call
 // except the explicit A = analyze) ------------------------------------------
@@ -1163,8 +1177,7 @@ function jumpToFinding(idx) {
   ensureSrcRenderedThrough(end);
   locatedRange = { start: start, end: end };
   applyLocateHighlight();
-  const first = contentEl.querySelector('.ln[data-line="' + start + '"]');
-  if (first) first.scrollIntoView({ block:'center' });
+  centerLine(start);
 }
 function typingInField(el) {
   if (!el) return false;

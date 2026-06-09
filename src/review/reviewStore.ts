@@ -109,6 +109,34 @@ export function storageKey(k: ReviewKey): string {
 }
 
 /**
+ * Storage key for a single file's review progress. Deliberately scope- and
+ * commit-independent: progress (reading / findings / dispositions / notes)
+ * belongs to the FILE, so it follows the file across scope re-selections and
+ * commits instead of being orphaned when the scope id changes.
+ */
+export function fileStorageKey(repo: string, filePath: string): string {
+  return `codereview:file:${repo}#${filePath}`;
+}
+
+/**
+ * Whether a per-file record carries NO progress at all (nothing seen, no
+ * findings, no notes, no dispositions). Used both to detect blank records a
+ * buggy build may have written (so migration can recover real progress) and as
+ * a write guard so a blank can never overwrite a non-blank record.
+ */
+export function isBlankFileState(s: PerFileState | undefined): boolean {
+  if (!s) {
+    return true;
+  }
+  const noSeen = !s.seenLines || s.seenLines.length === 0;
+  const noFindings = !s.findings || s.findings.length === 0;
+  const noNotes = !s.annotations || s.annotations.length === 0;
+  const noDisp = !s.dispositions || Object.keys(s.dispositions).length === 0;
+  const noLegacy = !s.confirmedFindings || s.confirmedFindings.length === 0;
+  return noSeen && noFindings && noNotes && noDisp && noLegacy;
+}
+
+/**
  * Abstraction over where review progress lives. The local implementation uses
  * workspaceState; a future remote implementation can make progress follow the
  * user across machines.
@@ -124,6 +152,17 @@ export interface ReviewStore {
    * Returns undefined when the store can't enumerate keys.
    */
   findLatestForScope?(repo: string, scopeId: string): Promise<ReviewSnapshot | undefined>;
+  /** Loads a single file's progress (per-file storage), or undefined. */
+  loadFile?(repo: string, filePath: string): Promise<PerFileState | undefined>;
+  /** Saves a single file's progress (per-file storage). */
+  saveFile?(repo: string, filePath: string, state: PerFileState): Promise<void>;
+  /**
+   * Migration helper: builds a path→PerFileState index from all legacy per-scope
+   * snapshots for the repo in a SINGLE pass (most-recently-updated wins). Lets
+   * per-file storage adopt pre-split progress without rescanning every snapshot
+   * once per file.
+   */
+  buildLegacyFileIndex?(repo: string): Promise<Map<string, PerFileState>>;
 }
 
 /** Local, single-machine store backed by VS Code workspaceState. */
@@ -158,5 +197,49 @@ export class WorkspaceStateReviewStore implements ReviewStore {
       }
     }
     return best;
+  }
+
+  async loadFile(repo: string, filePath: string): Promise<PerFileState | undefined> {
+    return this.memento.get<PerFileState>(fileStorageKey(repo, filePath));
+  }
+
+  async saveFile(repo: string, filePath: string, state: PerFileState): Promise<void> {
+    // Defensive: never let a BLANK record overwrite an existing one that carries
+    // real progress. A buggy migration/persist once wiped files this way; this
+    // guard makes that class of data loss impossible going forward.
+    if (isBlankFileState(state)) {
+      const existing = this.memento.get<PerFileState>(fileStorageKey(repo, filePath));
+      if (existing && !isBlankFileState(existing)) {
+        return;
+      }
+    }
+    await this.memento.update(fileStorageKey(repo, filePath), state);
+  }
+
+  async buildLegacyFileIndex(repo: string): Promise<Map<string, PerFileState>> {
+    // ONE pass over the legacy per-scope snapshots, building a path→state map
+    // (most-recently-updated snapshot wins per file). This replaces a per-file
+    // scan that deserialized every large snapshot N times and made startup
+    // O(files × keys × snapshotSize).
+    const prefix = `codereview:review:${repo}#`;
+    const index = new Map<string, PerFileState>();
+    const at = new Map<string, number>();
+    for (const key of this.memento.keys()) {
+      if (!key.startsWith(prefix)) {
+        continue;
+      }
+      const snap = this.memento.get<ReviewSnapshot>(key);
+      if (!snap?.perFile) {
+        continue;
+      }
+      const updated = snap.updatedAt ?? 0;
+      for (const [filePath, state] of Object.entries(snap.perFile)) {
+        if (!index.has(filePath) || updated > (at.get(filePath) ?? 0)) {
+          index.set(filePath, state);
+          at.set(filePath, updated);
+        }
+      }
+    }
+    return index;
   }
 }

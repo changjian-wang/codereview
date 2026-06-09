@@ -19,7 +19,10 @@ export interface PickedScope {
 }
 
 /** Lets the user choose how the set of source files under review is scoped. */
-export async function pickScope(defaultCwd: string): Promise<PickedScope | undefined> {
+export async function pickScope(
+  defaultCwd: string,
+  viewColumn?: vscode.ViewColumn,
+): Promise<PickedScope | undefined> {
   type Item = vscode.QuickPickItem & { build: () => Promise<PickedScope | undefined> };
   const items: Item[] = [
     {
@@ -59,6 +62,7 @@ export async function pickScope(defaultCwd: string): Promise<PickedScope | undef
     const picked = await pickScopeTree({
       rootLabel: path.basename(defaultCwd) || defaultCwd,
       relPaths,
+      viewColumn,
     });
     if (!picked || picked.length === 0) {
       return undefined;

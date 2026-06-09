@@ -5,6 +5,7 @@ import type { ReviewSet } from '../scope/types';
 import type { Finding, GlobalReport } from '../ai/types';
 import type { TokenUsage } from '../ai/analyzer';
 import type { PerFileState, ReviewKey, ReviewSnapshot, ReviewStore, Annotation, ReviewConclusion, FindingDisposition, TokenAccount } from './reviewStore';
+import { isBlankFileState } from './reviewStore';
 
 /**
  * Holds the in-memory state of the active review and persists it through a
@@ -44,72 +45,97 @@ export class ReviewSession {
     this.reviewSet = reviewSet;
     this.cwd = cwd;
     this.repoName = cwd ? path.basename(cwd) : this.defaultRepo;
+    const repo = this.repoName;
     const key: ReviewKey = {
-      repo: this.repoName,
+      repo,
       scopeId: reviewSet.scopeId,
       headSha: reviewSet.headSha,
     };
-    let snapshot = await this.store.load(key);
 
-    // Migration: a pure-source review's key used to embed the git HEAD SHA, but
-    // now uses a fixed 'live' head so progress survives commits/pulls. If the
-    // new key misses, adopt the most recent legacy snapshot for the same
-    // repo+scopeId and re-save it under the new key so prior progress carries
-    // over once.
-    if (!snapshot && reviewSet.headSha === 'live' && this.store.findLatestForScope) {
-      const legacy = await this.store.findLatestForScope(this.repoName, reviewSet.scopeId);
+    // Scope-level data (global report / conclusion / token usage) stays keyed to
+    // the scope. Per-FILE progress (reading / findings / dispositions / notes)
+    // now lives in its own per-file store so it follows the file across scope
+    // re-selections instead of vanishing when the scope id changes.
+    let scopeSnap = await this.store.load(key);
+    if (!scopeSnap && reviewSet.headSha === 'live' && this.store.findLatestForScope) {
+      const legacy = await this.store.findLatestForScope(repo, reviewSet.scopeId);
       if (legacy) {
-        snapshot = { ...legacy, headSha: 'live' };
-        await this.store.save(snapshot);
+        scopeSnap = { ...legacy, headSha: 'live' };
       }
     }
 
-    if (!snapshot) {
-      const perFile: Record<string, PerFileState> = {};
-      for (const f of reviewSet.files) {
-        perFile[f.path] = {
-          seenLines: [],
-          totalLines: 0,
-          analyzed: false,
-          findings: [],
-          confirmedFindings: [],
-        };
+    // Build the in-memory perFile map. Each file's own record is the source of
+    // truth; on first run after the split, adopt progress from a one-pass index
+    // of legacy per-scope snapshots (built lazily only if a file misses).
+    const perFile: Record<string, PerFileState> = {};
+    const toMigrate: string[] = [];
+    // Load every file's own record in parallel (each is a cheap single-key get).
+    const loaded = await Promise.all(
+      reviewSet.files.map(async (f) =>
+        [f.path, this.store.loadFile ? await this.store.loadFile(repo, f.path) : undefined] as const,
+      ),
+    );
+    let legacyIndex: Map<string, PerFileState> | undefined;
+    for (const [filePath, own] of loaded) {
+      let state = own;
+      // Treat an empty per-file record as a miss for migration purposes: a buggy
+      // earlier build could have written blank records (seen/findings empty),
+      // which would otherwise mask real progress still held in a legacy snapshot.
+      if (!state || isBlankFileState(state)) {
+        // Build the legacy index once, the first time any file needs it.
+        if (!legacyIndex && this.store.buildLegacyFileIndex) {
+          legacyIndex = await this.store.buildLegacyFileIndex(repo);
+        }
+        const recovered = legacyIndex?.get(filePath) ?? scopeSnap?.perFile?.[filePath];
+        // Only override with legacy data when it actually carries progress.
+        if (recovered && !isBlankFileState(recovered)) {
+          state = recovered;
+          toMigrate.push(filePath);
+        }
       }
-      snapshot = {
-        repo: this.repoName,
-        scopeId: reviewSet.scopeId,
-        headSha: reviewSet.headSha,
-        perFile,
-        globalDone: false,
-        updatedAt: Date.now(),
-      };
-      await this.store.save(snapshot);
+      perFile[filePath] = normaliseFileState(state);
     }
 
-    this.snapshot = snapshot;
-    // Normalise older snapshots that predate fields added in later slices.
-    for (const f of reviewSet.files) {
-      const s = this.snapshot.perFile[f.path];
-      if (s && !Array.isArray(s.findings)) {
-        s.findings = [];
-      }
-      if (s && !Array.isArray(s.annotations)) {
-        s.annotations = [];
-      }
-      if (s && !s.dispositions) {
-        s.dispositions = {};
-      }
-      // Migrate legacy "confirmed read" marks to the new commented disposition.
-      if (s?.confirmedFindings?.length) {
-        for (const id of s.confirmedFindings) {
-          if (!s.dispositions![id]) {
-            s.dispositions![id] = { kind: 'commented', at: Date.now() };
+    this.snapshot = {
+      repo,
+      scopeId: reviewSet.scopeId,
+      headSha: reviewSet.headSha,
+      perFile,
+      globalReport: scopeSnap?.globalReport,
+      globalDone: scopeSnap?.globalDone ?? false,
+      globalFixDispositions: scopeSnap?.globalFixDispositions,
+      conclusion: scopeSnap?.conclusion,
+      tokenUsage: scopeSnap?.tokenUsage,
+      updatedAt: Date.now(),
+    };
+    // Surface the panel immediately; persist migrated/initial state in the
+    // background so a large review set doesn't block opening.
+    this._onDidChange.fire();
+    void this.persistInBackground(repo, toMigrate);
+  }
+
+  /**
+   * Persists the freshly-assembled scope snapshot and any per-file records that
+   * were migrated or newly created — off the startup path so a large review set
+   * opens immediately.
+   */
+  private async persistInBackground(repo: string, migratedPaths: string[]): Promise<void> {
+    if (!this.snapshot) {
+      return;
+    }
+    try {
+      if (this.store.saveFile) {
+        for (const p of migratedPaths) {
+          const s = this.snapshot.perFile[p];
+          if (s) {
+            await this.store.saveFile(repo, p, s);
           }
         }
-        s.confirmedFindings = [];
       }
+      await this.persistScopeMeta();
+    } catch {
+      // Non-fatal: progress stays in memory and re-persists on the next change.
     }
-    this._onDidChange.fire();
   }
 
   fileState(path: string): PerFileState | undefined {
@@ -163,7 +189,7 @@ export class ReviewSession {
     const s = this.fileState(path);
     if (s && s.totalLines !== total) {
       s.totalLines = total;
-      void this.persist();
+      this.persistFile(path);
     }
   }
 
@@ -190,7 +216,7 @@ export class ReviewSession {
       return false;
     }
     s.seenLines = [...set].sort((a, b) => a - b);
-    void this.persist();
+    this.persistFile(path);
     return true;
   }
 
@@ -245,7 +271,7 @@ export class ReviewSession {
     s.analyzed = true;
     s.dispositions = next;
     s.confirmedFindings = [];
-    void this.persist();
+    this.persistFile(path);
   }
 
   findings(path: string): Finding[] {
@@ -272,7 +298,7 @@ export class ReviewSession {
     } else {
       s.dispositions[findingId] = { ...disposition, at: disposition.at || Date.now() };
     }
-    void this.persist();
+    this.persistFile(path);
     return true;
   }
 
@@ -301,7 +327,7 @@ export class ReviewSession {
       return;
     }
     (s.annotations ??= []).push(annotation);
-    void this.persist();
+    this.persistFile(path);
   }
 
   /** Removes an annotation by id. */
@@ -313,7 +339,7 @@ export class ReviewSession {
     const next = s.annotations.filter((a) => a.id !== id);
     if (next.length !== s.annotations.length) {
       s.annotations = next;
-      void this.persist();
+      this.persistFile(path);
     }
   }
 
@@ -336,14 +362,14 @@ export class ReviewSession {
     if (patch.kind) {
       a.kind = patch.kind;
     }
-    void this.persist();
+    this.persistFile(path);
   }
 
   /** Stores the cross-file global report (reviewer must still confirm it). */
   setGlobalReport(report: GlobalReport): void {
     if (this.snapshot) {
       this.snapshot.globalReport = report;
-      void this.persist();
+      this.persistScope();
     }
   }
 
@@ -414,14 +440,14 @@ export class ReviewSession {
     } else {
       delete store[spotId];
     }
-    void this.persist();
+    this.persistScope();
   }
 
   /** Reviewer confirms they have read the global conclusion. */
   confirmGlobal(): void {
     if (this.snapshot?.globalReport) {
       this.snapshot.globalDone = true;
-      void this.persist();
+      this.persistScope();
     }
   }
 
@@ -433,7 +459,7 @@ export class ReviewSession {
   setConclusion(conclusion: ReviewConclusion): void {
     if (this.snapshot) {
       this.snapshot.conclusion = conclusion;
-      void this.persist();
+      this.persistScope();
     }
   }
 
@@ -465,7 +491,7 @@ export class ReviewSession {
     bucket.calls += 1;
     acct.byOp[usage.op] = bucket;
     this.snapshot.tokenUsage = acct;
-    void this.persist();
+    this.persistScope();
   }
 
   /** Estimated token usage accumulated over this review, if any. */
@@ -500,17 +526,67 @@ export class ReviewSession {
   }
 
   async persist(): Promise<void> {
-    if (this.snapshot) {
-      this.snapshot.updatedAt = Date.now();
-      try {
-        await this.store.save(this.snapshot);
-      } catch (err) {
-        const message = String((err as Error)?.message ?? err);
-        void vscode.window.showWarningMessage(m().review.saveFailed(message));
-        return;
-      }
-      this._onDidChange.fire();
+    if (!this.snapshot) {
+      return;
     }
+    const repo = this.getRepoName();
+    try {
+      // Per-file progress → per-file storage (the source of truth). The scope
+      // snapshot keeps only scope-level data; writing every file here too would
+      // make each change re-serialize a huge object, so we DON'T — see
+      // persistScopeMeta / persistFile for the granular writes.
+      if (this.store.saveFile) {
+        for (const [filePath, state] of Object.entries(this.snapshot.perFile)) {
+          await this.store.saveFile(repo, filePath, state);
+        }
+      }
+      await this.persistScopeMeta();
+    } catch (err) {
+      const message = String((err as Error)?.message ?? err);
+      void vscode.window.showWarningMessage(m().review.saveFailed(message));
+      return;
+    }
+    this._onDidChange.fire();
+  }
+
+  /**
+   * Persists ONE file's progress plus the (small) scope metadata — the granular
+   * path used by per-file mutations so a 300-file review doesn't re-write every
+   * record on each keystroke/scroll.
+   */
+  private persistFile(filePath: string): void {
+    if (!this.snapshot) {
+      return;
+    }
+    const repo = this.getRepoName();
+    const state = this.snapshot.perFile[filePath];
+    void (async () => {
+      try {
+        if (state && this.store.saveFile) {
+          await this.store.saveFile(repo, filePath, state);
+        }
+        await this.persistScopeMeta();
+      } catch {
+        // Non-fatal; stays in memory and re-persists on the next change.
+      }
+    })();
+    this._onDidChange.fire();
+  }
+
+  /** Saves the scope-level snapshot (global report / conclusion / token usage),
+   * with the bulky perFile map stripped — per-file storage owns that. */
+  private async persistScopeMeta(): Promise<void> {
+    if (!this.snapshot) {
+      return;
+    }
+    this.snapshot.updatedAt = Date.now();
+    await this.store.save({ ...this.snapshot, perFile: {} });
+  }
+
+  /** Fire-and-forget scope-meta persist for scope-level mutations (no per-file rewrite). */
+  private persistScope(): void {
+    void this.persistScopeMeta().catch(() => {/* non-fatal */});
+    this._onDidChange.fire();
   }
 
   dispose(): void {
@@ -527,4 +603,30 @@ export class ReviewSession {
 function findingSignature(f: Finding): string {
   const body = (f.anchor ?? f.detail ?? '').trim();
   return `${f.severity}\u0000${f.title.trim()}\u0000${body}`;
+}
+
+/**
+ * Returns a well-formed PerFileState from a possibly-undefined or legacy record:
+ * fills missing arrays/maps and migrates the legacy `confirmedFindings` marks to
+ * `commented` dispositions. Never mutates the input.
+ */
+function normaliseFileState(s: PerFileState | undefined): PerFileState {
+  const out: PerFileState = {
+    seenLines: Array.isArray(s?.seenLines) ? [...s!.seenLines] : [],
+    totalLines: s?.totalLines ?? 0,
+    analyzed: s?.analyzed ?? false,
+    findings: Array.isArray(s?.findings) ? [...s!.findings] : [],
+    confirmedFindings: [],
+    dispositions: { ...(s?.dispositions ?? {}) },
+    annotations: Array.isArray(s?.annotations) ? [...s!.annotations] : [],
+  };
+  // Migrate legacy "confirmed read" marks to the commented disposition.
+  if (s?.confirmedFindings?.length) {
+    for (const id of s.confirmedFindings) {
+      if (!out.dispositions![id]) {
+        out.dispositions![id] = { kind: 'commented', at: Date.now() };
+      }
+    }
+  }
+  return out;
 }
