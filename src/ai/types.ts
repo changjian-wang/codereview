@@ -57,28 +57,6 @@ export interface GlobalVerdict {
 /** Recommended overall outcome from the global analysis. */
 export type GlobalRecommendation = 'approve' | 'request_changes' | 'comment';
 
-/** One edge in the call graph backing the analysis. */
-export interface CallGraphNode {
-  /** Display name (symbol / service). */
-  name: string;
-  /** Short role label, e.g. "Authentication 层 · 唯一调用方". */
-  role?: string;
-  /** Lifetime / scope label, e.g. "Scoped". */
-  lifetime?: string;
-  /** Whether this node is part of the change set under review. */
-  changed?: boolean;
-}
-
-/** A single architecture / intent conformance check. */
-export interface ArchitectureCheck {
-  /** ok = passes, warn = needs attention, info = note. */
-  status: 'ok' | 'warn' | 'info';
-  /** Short label, e.g. "分层合规" / "意图覆盖". */
-  label: string;
-  /** Detail / evidence. */
-  detail: string;
-}
-
 /** Cross-file analysis report shown in the (single) rich webview. */
 export interface GlobalReport {
   /** One-paragraph cross-file conclusion. */
@@ -91,8 +69,4 @@ export interface GlobalReport {
   verdicts: GlobalVerdict[];
   /** Concrete fix spots, grouped by severity in the UI. */
   fixSpots: GlobalFixSpot[];
-  /** Ordered call graph (caller → callee) backing the analysis. */
-  callGraph: CallGraphNode[];
-  /** Architecture-layer and PR-intent conformance checks. */
-  architectureChecks: ArchitectureCheck[];
 }

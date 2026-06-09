@@ -28,6 +28,8 @@ export interface GlobalReportStats {
   filesReady: number;
   filesTotal: number;
   findings: number;
+  /** The real review gate (files ready + global confirmed); the banner's single source of truth. */
+  gatePassed?: boolean;
 }
 
 /**
@@ -168,23 +170,19 @@ export class GlobalReportPanel {
     const allHandled = total > 0 && pendingCount === 0;
     const progressPct = total > 0 ? Math.round((handledCount / total) * 100) : 100;
 
-    // ---- Dynamic conclusion banner ----
-    // When every fix spot has been handled, the banner leans toward "approve"
-    // regardless of the model's original recommendation — the to-do list is done.
-    const recClass = allHandled
-      ? 'ok'
-      : report.recommendation === 'request_changes'
-        ? 'block'
-        : report.recommendation === 'approve'
-          ? 'ok'
-          : '';
-    const recTitle =
-      allHandled && report.recommendation !== 'approve'
-        ? recLabel.approve
-        : recLabel[report.recommendation];
-    const hint = total === 0 ? t.noTodos : allHandled ? t.allHandledHint : t.pendingHint(pendingCount);
-
+    // ---- Gate state: the SINGLE source of truth for "can I submit?" ----
+    // The gate is files-ready + global-confirmed (mirrors session.gatePassed()).
+    // Fix-spot handling is advisory (Option A) and deliberately NOT part of it.
     const s = this.handlers.stats;
+    const filesReady = s?.filesReady ?? 0;
+    const filesTotal = s?.filesTotal ?? 0;
+    const filesAllReady = filesTotal > 0 ? filesReady >= filesTotal : true;
+    const gatePassed = s?.gatePassed ?? (confirmed && filesAllReady);
+    const filesBlocking = !filesAllReady;
+    const globalBlocking = !confirmed;
+
+    const recClass = gatePassed ? 'ok' : 'block';
+    const gateTitle = gatePassed ? t.gatePassTitle : t.gateFailTitle;
     const covPct = s && s.total > 0 ? Math.round((s.seen / s.total) * 100) : 0;
     const heroStats = s
       ? `<div class="hero-stats">
@@ -193,6 +191,27 @@ export class GlobalReportPanel {
           <span class="hstat"><b>${s.findings}</b> ${esc(t.fileFindings)}</span>
         </div>`
       : '';
+
+    // Gate checklist mirrors the exact reasons submitConclusion() surfaces, so the
+    // panel can never show "green" while the real gate is still closed.
+    const gateRow = (done: boolean, text: string, action: string): string =>
+      `<li class="gate-item ${done ? 'done' : 'todo'}">
+        <span class="gate-mark">${done ? '✓' : '○'}</span>
+        <span class="gate-text">${esc(text)}</span>
+        ${action}
+      </li>`;
+    const filesAction = filesBlocking
+      ? `<button class="gate-cta" id="goto-files-cta">${esc(t.gateGotoFiles)}</button>`
+      : '';
+    const confirmAction = globalBlocking
+      ? `<button class="gate-cta primary" id="confirm">${esc(t.confirmReadBtn)}</button>`
+      : `<span class="gate-done-badge">${esc(t.confirmedReadBadge)}</span>`;
+    const gateChecklist = gatePassed
+      ? `<div class="gate-pass">${esc(t.gateAllMet)}</div>`
+      : `<ul class="gate-list">
+          ${gateRow(filesAllReady, filesAllReady ? t.gateFilesDone : m().conclusion.gateFilesUnready(filesTotal - filesReady), filesAction)}
+          ${gateRow(confirmed, confirmed ? t.gateGlobalDone : m().conclusion.gateGlobalUnconfirmed, confirmAction)}
+        </ul>`;
     const banner = `
     <div class="hero">
       <div class="tabs">
@@ -203,21 +222,32 @@ export class GlobalReportPanel {
     <div class="decision ${recClass}">
       <div class="decision-main">
         <div class="kicker">${esc(t.kicker)}</div>
-        <div class="decision-title">${esc(recTitle)}</div>
+        <div class="decision-title">${esc(gateTitle)}</div>
+        <div class="ai-verdict av-${report.recommendation}">${esc(t.aiVerdictPrefix)}${esc(recLabel[report.recommendation])}</div>
         <div class="decision-copy">${esc(report.conclusion)}</div>
-        <div class="progress-wrap">
-          <div class="progress-bar"><div class="progress-fill" style="width:${progressPct}%"></div></div>
-          <div class="progress-text">
-            <span class="ptotal">${esc(t.progressHandled(handledCount, total))}</span>
-            <span class="phint${allHandled ? ' ok' : ''}">${esc(hint)}</span>
-          </div>
-        </div>
+        <div class="gate-wrap">${gateChecklist}</div>
       </div>
       ${heroStats}
     </div>`;
 
+    // Advisory fix-spot progress — shown inside the fix-spots section, NOT the gate.
+    const progressLine =
+      total > 0
+        ? `<div class="progress-wrap">
+          <div class="progress-bar"><div class="progress-fill" style="width:${progressPct}%"></div></div>
+          <div class="progress-text">
+            <span class="ptotal">${esc(t.progressHandled(handledCount, total))}</span>
+            <span class="phint${allHandled ? ' ok' : ''}">${esc(allHandled ? t.allHandledHint : t.pendingHint(pendingCount))}</span>
+          </div>
+        </div>`
+        : '';
+
+    // Promote the re-review verdicts: real cross-file finds (found) and overturned
+    // false positives (flip) first, confirmations last.
+    const verdictRank = (k: string): number => (k === 'found' ? 0 : k === 'flip' ? 1 : 2);
+    const sortedVerdicts = [...report.verdicts].sort((a, b) => verdictRank(a.kind) - verdictRank(b.kind));
     const verdictSection = report.verdicts.length
-      ? report.verdicts
+      ? sortedVerdicts
           .map(
             (v) => `
         <div class="verdict-card vk-${v.kind}">
@@ -334,6 +364,10 @@ export class GlobalReportPanel {
   .decision.ok { border-left-color: var(--green); background: linear-gradient(90deg, var(--green-bg), transparent); }
   .kicker { font-size: .68rem; text-transform: uppercase; letter-spacing: .07em; opacity: .6; }
   .decision-title { font-size: 1.05rem; font-weight: 700; margin: .2rem 0 .4rem; }
+  .ai-verdict { display: inline-block; font-size: .72rem; font-weight: 600; padding: .12rem .55rem; border-radius: 10px; margin-bottom: .45rem; border: 1px solid transparent; }
+  .ai-verdict.av-approve { background: var(--green-bg); color: var(--green); border-color: rgba(78,201,176,.35); }
+  .ai-verdict.av-request_changes { background: var(--red-bg); color: var(--red); border-color: rgba(241,76,76,.35); }
+  .ai-verdict.av-comment { background: var(--blue-bg); color: var(--blue); border-color: rgba(86,156,214,.35); }
   .decision-copy { font-size: .85rem; opacity: .9; }
   .metrics { display: flex; gap: 1rem; align-items: center; }
   .metric { text-align: center; min-width: 3.4rem; }
@@ -397,23 +431,6 @@ export class GlobalReportPanel {
   .fixed-badge { color: var(--vscode-charts-green, #4caf50); font-size: .8rem; font-weight: 600; align-self: center; }
   .fixitem.is-fixed { opacity: .7; }
 
-  /* Call graph */
-  .callgraph { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: .4rem 0 .2rem; }
-  .cg-node { display: inline-flex; flex-direction: column; border: 1px solid var(--line); border-radius: 7px; padding: .4rem .65rem; background: var(--elevated); font-family: var(--vscode-editor-font-family); font-size: .8rem; }
-  .cg-node.changed { border-color: var(--purple); box-shadow: 0 0 0 1px var(--purple-bg); }
-  .cg-node .cg-role { font-size: .66rem; opacity: .6; font-family: var(--vscode-font-family); margin-top: .15rem; }
-  .cg-node .cg-life { display: inline-block; margin-top: .25rem; font-size: .64rem; padding: 0 .4rem; border-radius: 6px; background: var(--blue-bg); color: var(--blue); font-family: var(--vscode-font-family); }
-  .cg-arrow { color: var(--vscode-descriptionForeground); opacity: .6; }
-
-  /* Architecture / intent list */
-  .glist { list-style: none; padding: 0; margin: .3rem 0; }
-  .glist li { display: flex; gap: .6rem; padding: .45rem 0; border-bottom: 1px solid var(--line); font-size: .85rem; align-items: flex-start; }
-  .glist li:last-child { border-bottom: none; }
-  .gi { flex-shrink: 0; margin-top: .05rem; }
-  .gi-ok { color: var(--green); }
-  .gi-warn { color: var(--yellow); }
-  .gi-info { color: var(--blue); }
-
   /* Progress bar in the conclusion banner */
   .progress-wrap { margin-top: .7rem; }
   .progress-bar { height: 6px; border-radius: 4px; background: var(--elevated); overflow: hidden; border: 1px solid var(--line); }
@@ -422,6 +439,21 @@ export class GlobalReportPanel {
   .progress-text .ptotal { opacity: .7; }
   .progress-text .phint { opacity: .7; }
   .progress-text .phint.ok { color: var(--green); opacity: 1; font-weight: 600; }
+
+  /* Gate checklist in the decision banner */
+  .gate-wrap { margin-top: .7rem; }
+  .gate-list { list-style: none; padding: 0; margin: 0; display: grid; gap: .45rem; }
+  .gate-item { display: flex; align-items: center; gap: .5rem; font-size: .82rem; }
+  .gate-item .gate-mark { width: 1rem; text-align: center; flex-shrink: 0; }
+  .gate-item.done .gate-mark { color: var(--green); }
+  .gate-item.todo .gate-mark { color: var(--yellow); }
+  .gate-item .gate-text { opacity: .9; }
+  .gate-cta { margin-left: auto; flex-shrink: 0; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
+  .gate-cta.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+  .gate-cta:hover { background: var(--vscode-button-hoverBackground, var(--vscode-toolbar-hoverBackground)); }
+  .gate-done-badge { margin-left: auto; flex-shrink: 0; color: var(--green); font-size: .76rem; font-weight: 600; }
+  .gate-pass { color: var(--green); font-weight: 600; font-size: .9rem; }
+  .section-sub { font-size: .76rem; margin: -.2rem 0 .55rem; }
 
   /* Action buttons on to-do / handled rows */
   .act { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
@@ -455,7 +487,13 @@ export class GlobalReportPanel {
 <body>
   ${banner}
 
-  <h2>${esc(t.sectionPending)}</h2>
+  <h2>${esc(t.sectionReview)}</h2>
+  <p class="muted section-sub">${esc(t.reviewSubtitle)}</p>
+  ${verdictSection}
+
+  <h2>${esc(t.sectionFixAdvisory)}</h2>
+  <p class="muted section-sub">${esc(t.fixSpotsAdvisoryNote)}</p>
+  ${progressLine}
   ${pendingHtml}
 
   <details class="fold">
@@ -468,17 +506,8 @@ export class GlobalReportPanel {
     <div class="basis">
       <h3>${esc(t.basisEvidenceTitle)}</h3>
       ${evidence}
-      ${report.verdicts.length ? `<h3>${esc(t.basisVerdictsTitle)}</h3>${verdictSection}` : ''}
     </div>
   </details>
-
-  <div class="confirm-bar">
-    ${
-      confirmed
-        ? `<span class="done">${esc(t.confirmedReadBadge)}</span>`
-        : `<button id="confirm">${esc(t.confirmReadBtn)}</button>`
-    }
-  </div>
 
 <script nonce="${nonce}">
   const vscode = acquireVsCodeApi();
@@ -486,6 +515,10 @@ export class GlobalReportPanel {
   const tabFiles = document.getElementById('tab-files');
   if (tabFiles) {
     tabFiles.addEventListener('click', () => vscode.postMessage({ type: 'gotoFiles' }));
+  }
+  const gotoCta = document.getElementById('goto-files-cta');
+  if (gotoCta) {
+    gotoCta.addEventListener('click', () => vscode.postMessage({ type: 'gotoFiles' }));
   }
   document.querySelectorAll('.locate').forEach((btn) => {
     btn.addEventListener('click', () => {

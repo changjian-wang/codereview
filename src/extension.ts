@@ -1766,6 +1766,7 @@ function showGlobalReport(): void {
       filesReady: cov.filesReady,
       filesTotal: cov.filesTotal,
       findings: findingsCount,
+      gatePassed: session.gatePassed(),
     },
   });
 }
