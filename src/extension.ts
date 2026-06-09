@@ -222,7 +222,7 @@ export function activate(context: vscode.ExtensionContext): void {
   // Restore the workbench panel after a window reload: if VS Code kept the
   // popped-out review panel, this serializer hands it back. We reload the last
   // review folder so the panel has live data, then re-attach it — no need for
-  // the user to click 「Open in Code Review」 again.
+  // the user to click 「Open in AI Coding Review」 again.
   context.subscriptions.push(
     vscode.window.registerWebviewPanelSerializer('codereview.workbench', {
       deserializeWebviewPanel: async (panel) => {
@@ -263,7 +263,7 @@ let statusBarItem: vscode.StatusBarItem | undefined;
 /** Adds a persistent status bar button that opens the workbench or starts a new review. */
 function createStatusBarEntry(): vscode.StatusBarItem {
   const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-  item.name = 'Code Review';
+  item.name = 'AI Coding Review';
   // Show a spinner until activation finishes; clicking before then would be a
   // no-op and confuse the user, so we signal "loading" explicitly.
   item.text = `$(loading~spin) ${m().statusBar.loading}`;
@@ -322,7 +322,7 @@ async function openOrStartReview(): Promise<void> {
 }
 
 /**
- * "Open in Code Review" — the analogue of VS Code's "Open in Agents Window":
+ * "Open in AI Coding Review" — the analogue of VS Code's "Open in Agents Window":
  * pick a workspace folder (in multi-root setups), pop the workbench into a
  * separate auxiliary window, and let the user pick the review scope inside it.
  *
@@ -484,7 +484,7 @@ async function selectModel(): Promise<void> {
 
 /**
  * Lets the user switch the whole-experience language (UI + LLM output) from
- * inside Code Review, instead of digging through VS Code settings. Writes
+ * inside AI Coding Review, instead of digging through VS Code settings. Writes
  * `codereview.language`, which the config-change listener picks up to re-render
  * the status bar and any open webviews live.
  */
@@ -1609,7 +1609,7 @@ function composeCommentBody(finding: { title: string; detail: string; suggestion
   if (finding.suggestion) {
     parts.push('', m().fix.suggestionLabel(finding.suggestion));
   }
-  parts.push('', '_via Code Review_');
+  parts.push('', '_via AI Coding Review_');
   return parts.join('\n');
 }
 

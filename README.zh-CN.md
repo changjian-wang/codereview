@@ -1,10 +1,10 @@
-# Code Review Gate
+# AI Coding Review
 
 > 不信任驱动的代码审查：**每一行都必须被看过**。把 “Review = 不信任” 做成硬门禁——逐行通读 + 文件级 AI 分析 + 逐条处置每个问题 + 跨文件全局分析，全部完成才允许给出审查结论。
 
-[![VS Marketplace Version](https://img.shields.io/visual-studio-marketplace/v/codereview-dev.code-review-gate?label=Marketplace&color=blue)](https://marketplace.visualstudio.com/items?itemName=codereview-dev.code-review-gate)
-[![Installs](https://img.shields.io/visual-studio-marketplace/i/codereview-dev.code-review-gate)](https://marketplace.visualstudio.com/items?itemName=codereview-dev.code-review-gate)
-[![Rating](https://img.shields.io/visual-studio-marketplace/r/codereview-dev.code-review-gate)](https://marketplace.visualstudio.com/items?itemName=codereview-dev.code-review-gate)
+[![VS Marketplace Version](https://img.shields.io/visual-studio-marketplace/v/changjian-wang.ai-coding-review?label=Marketplace&color=blue)](https://marketplace.visualstudio.com/items?itemName=changjian-wang.ai-coding-review)
+[![Installs](https://img.shields.io/visual-studio-marketplace/i/changjian-wang.ai-coding-review)](https://marketplace.visualstudio.com/items?itemName=changjian-wang.ai-coding-review)
+[![Rating](https://img.shields.io/visual-studio-marketplace/r/changjian-wang.ai-coding-review)](https://marketplace.visualstudio.com/items?itemName=changjian-wang.ai-coding-review)
 
 VS Code 扩展 · 由 GitHub CLI 与 Copilot 模型驱动
 
@@ -67,7 +67,7 @@ gatePassed = 所有文件就绪 && 全局分析已确认
 
 ## 语言（双语）
 
-Code Review Gate 全面双语（English / 简体中文），**默认英文**。
+AI Coding Review 全面双语（English / 简体中文），**默认英文**。
 
 - `codereview.language` 驱动**整体体验**——既包括扩展 UI（状态栏、提示、Webview 面板），也包括所有 LLM 输出（findings、修复方案、讲解、全局结论）。
   - `en`（默认）：全部英文

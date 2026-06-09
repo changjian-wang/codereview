@@ -1,6 +1,6 @@
 ---
 description: |
-  Use when: Adding or changing behavior in the Code Review Gate extension — webview panels, host↔webview messaging, i18n strings, commands, activation, editor-group layout
+  Use when: Adding or changing behavior in the AI Coding Review extension — webview panels, host↔webview messaging, i18n strings, commands, activation, editor-group layout
   Don't use when:
     - Publishing to the Marketplace (use release-publish)
     - Pure docs/README edits with no code impact
@@ -11,7 +11,7 @@ description: |
 
 # VS Code Extension Conventions Skill
 
-Project-specific conventions for the **Code Review Gate** extension (TypeScript, esbuild-bundled, webview-heavy).
+Project-specific conventions for the **AI Coding Review** extension (TypeScript, esbuild-bundled, webview-heavy).
 
 ## Build & verify
 

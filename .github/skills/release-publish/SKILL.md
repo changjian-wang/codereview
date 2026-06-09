@@ -1,29 +1,29 @@
 ---
 description: |
-  Use when: Cutting and shipping a new version of the Code Review Gate extension to the VS Code Marketplace; setting up or refreshing the publish credential (PAT); diagnosing a failed `vsce publish`
+  Use when: Cutting and shipping a new version of the AI Coding Review extension to the VS Code Marketplace; setting up or refreshing the publish credential (PAT); diagnosing a failed `vsce publish`
   Don't use when:
     - Writing extension code or fixing behavior (use vscode-extension-conventions)
     - Only building/compiling locally with no intent to publish (`npm run compile`)
     - Editing README prose unrelated to release
   Inputs: A committed, compiling change you want live on the Marketplace
   Outputs: A new published version, README badges auto-updating, the version-bump commit pushed
-  Success criteria: `vsce publish` prints `Published codereview-dev.code-review-gate vX.Y.Z`, and `git push` syncs the bump commit
+  Success criteria: `vsce publish` prints `Published changjian-wang.ai-coding-review vX.Y.Z`, and `git push` syncs the bump commit
 ---
 
 # Release & Publish Skill
 
-Ships **Code Review Gate** to the VS Code Marketplace. Mirrors [`docs/RELEASING.md`](../../../docs/RELEASING.md) but is the agent-facing, step-driven version.
+Ships **AI Coding Review** to the VS Code Marketplace. Mirrors [`docs/RELEASING.md`](../../../docs/RELEASING.md) but is the agent-facing, step-driven version.
 
 ## Identity (do not change casually)
 
 | Thing | Value | Source |
 |------|-------|--------|
-| Marketplace item id | `codereview-dev.code-review-gate` | `publisher` + `name` in `package.json` |
-| Publisher | `codereview-dev` | marketplace.visualstudio.com/manage |
-| Store title | `Code Review Gate` | `displayName` |
+| Marketplace item id | `changjian-wang.ai-coding-review` | `publisher` + `name` in `package.json` |
+| Publisher | `changjian-wang` | marketplace.visualstudio.com/manage |
+| Store title | `AI Coding Review` | `displayName` |
 | Repo | `changjian-wang/codereview` (public) | GitHub |
 
-> The bare id `codereview` is already taken on the Marketplace — that is why `name` is `code-review-gate`. **Changing `name` or `publisher` rewrites the install id AND every README badge/link `itemName`** (`https://img.shields.io/visual-studio-marketplace/.../codereview-dev.code-review-gate`). If you must change it, grep both READMEs for the old `itemName` and fix every occurrence or the badges/links die.
+> The bare id `codereview` is taken on the Marketplace, so `name` is `ai-coding-review`. **Changing `name` or `publisher` rewrites the install id AND every README badge/link `itemName`** (`https://img.shields.io/visual-studio-marketplace/.../changjian-wang.ai-coding-review`). If you must change it, grep both READMEs for the old `itemName` and fix every occurrence or the badges/links die.
 
 ## Publish a new version (the happy path)
 
@@ -49,7 +49,7 @@ The README shows **live Marketplace badges** (version/installs/rating) — there
    - org `changjian-wang` at https://dev.azure.com (reach it via `https://aex.dev.azure.com/me`; the bare `dev.azure.com` may bounce to the marketing page)
    - Scope: **Show all scopes → Marketplace → Manage**
    - **Expires 2026-07-07.** When it lapses, regenerate and re-login.
-2. `npx --yes @vscode/vsce login codereview-dev` — paste the PAT into the terminal.
+2. `npx --yes @vscode/vsce login changjian-wang` — paste the PAT into the terminal.
    **Never** route the PAT through chat / the question tool; the user types it directly.
 
 ## Gotchas (all observed in this repo)
@@ -68,5 +68,5 @@ The README shows **live Marketplace badges** (version/installs/rating) — there
 ```bash
 # itemName page should become 200 within a few minutes
 curl -s -o /dev/null -w "%{http_code}\n" \
-  "https://marketplace.visualstudio.com/items?itemName=codereview-dev.code-review-gate"
+  "https://marketplace.visualstudio.com/items?itemName=changjian-wang.ai-coding-review"
 ```

@@ -20,13 +20,13 @@ export const en = {
   },
 
   statusBar: {
-    loading: 'Code Review: loading…',
-    loadingTooltip: 'Code Review is loading, please wait…',
-    opening: 'Opening Code Review…',
-    openingTooltip: 'Code Review is opening the review workbench, please wait…',
-    ready: 'Open in Code Review',
+    loading: 'AI Coding Review: loading…',
+    loadingTooltip: 'AI Coding Review is loading, please wait…',
+    opening: 'Opening AI Coding Review…',
+    openingTooltip: 'AI Coding Review is opening the review workbench, please wait…',
+    ready: 'Open in AI Coding Review',
     readyTooltip:
-      'Code Review: open the review workbench in a separate window (pick the review scope inside it)',
+      'AI Coding Review: open the review workbench in a separate window (pick the review scope inside it)',
   },
 
   /** Verbs slotted into review.notInScope(); keep them lowercase. */
@@ -43,35 +43,35 @@ export const en = {
 
   review: {
     notInScope: (rel: string, action: string) =>
-      `Code Review: ${rel} is not in the current review scope; skipped ${action}.`,
-    noWorkspace: 'Code Review: please open a workspace first.',
-    noGitWorkspace: 'Code Review: please open a Git repository workspace first.',
-    pickProjectTitle: 'Code Review · Pick a project to review',
+      `AI Coding Review: ${rel} is not in the current review scope; skipped ${action}.`,
+    noWorkspace: 'AI Coding Review: please open a workspace first.',
+    noGitWorkspace: 'AI Coding Review: please open a Git repository workspace first.',
+    pickProjectTitle: 'AI Coding Review · Pick a project to review',
     pickProjectPlaceholder: 'Choose which workspace folder to start the review in',
-    loadingProject: 'Code Review: loading project sources…',
-    loadingSource: 'Code Review: loading sources…',
+    loadingProject: 'AI Coding Review: loading project sources…',
+    loadingSource: 'AI Coding Review: loading sources…',
     noReviewableFiles:
       'No reviewable files in the selected project (skipped node_modules / .git / dist / out / bin / obj / .vs).',
     loaded: (label: string, count: number) => `Loaded ${label} · ${count} file(s)`,
     notStarted: '(not started)',
     notStartedWarn: 'Review has not started yet',
-    saveFailed: (msg: string) => `Code Review: failed to save review progress: ${msg}`,
-    error: (msg: string) => `Code Review: ${msg}`,
+    saveFailed: (msg: string) => `AI Coding Review: failed to save review progress: ${msg}`,
+    error: (msg: string) => `AI Coding Review: ${msg}`,
   },
 
   model: {
     switched: (label: string) => `Analysis model switched: ${label}`,
-    noModel: 'Code Review: no available Copilot model found.',
+    noModel: 'AI Coding Review: no available Copilot model found.',
     autoDescription: 'Let Copilot pick the most suitable model automatically',
-    pickTitle: 'Code Review · Select analysis model',
+    pickTitle: 'AI Coding Review · Select analysis model',
     pickPlaceholder: 'Select the model used for code review analysis',
     pickPlaceholderEmpty: 'No Copilot model detected; you can start with Auto',
     current: 'current',
   },
 
   analysis: {
-    translating: 'Code Review: translating…',
-    explaining: 'Code Review: explaining…',
+    translating: 'AI Coding Review: translating…',
+    explaining: 'AI Coding Review: explaining…',
     reuseExplanation: 'Already explained — showing the saved result (delete it to regenerate)',
     reuseTranslation: 'Already translated — showing the saved result (delete it to regenerate)',
     convertedToNote: 'Converted to a note — click Edit to modify it',
@@ -80,8 +80,8 @@ export const en = {
     deletedFileHandled: (rel: string) =>
       `${rel} is a deleted file; handled as a no-source analysis`,
     inProgress: (rel: string) => `${rel} is being analyzed, please wait`,
-    cannotOpen: (rel: string) => `Code Review: cannot open ${rel}`,
-    analyzingFile: (rel: string) => `Code Review: analyzing ${rel}`,
+    cannotOpen: (rel: string) => `AI Coding Review: cannot open ${rel}`,
+    analyzingFile: (rel: string) => `AI Coding Review: analyzing ${rel}`,
     callingModel: (file: string) => `Calling the model to analyze ${file}…`,
     writingFindings: 'Writing findings…',
     foundIssues: (rel: string, n: number) => `${rel}: found ${n} issue(s)`,
@@ -93,7 +93,7 @@ export const en = {
   report: {
     noReview: 'No active review to export',
     exported: 'Review report generated',
-    title: 'Code Review Report',
+    title: 'AI Coding Review Report',
     repo: 'Repository',
     scope: 'Scope',
     generatedAt: 'Generated',
@@ -135,7 +135,7 @@ export const en = {
   },
 
   annotation: {
-    addTitle: 'Code Review · Add annotation',
+    addTitle: 'AI Coding Review · Add annotation',
     linePrompt: (start: number, end: number) =>
       end > start ? `Lines ${start}–${end}` : `Line ${start}`,
     selectionPrompt: 'Selection annotation',
@@ -164,10 +164,10 @@ export const en = {
     postedLineComment: (pr: number) => `Posted as a line comment on PR #${pr}`,
     postedFallbackComment: (pr: number) =>
       `Line comment unavailable; posted as a normal comment on PR #${pr}`,
-    postCommentFailed: (msg: string) => `Code Review: failed to send the PR comment — ${msg}`,
+    postCommentFailed: (msg: string) => `AI Coding Review: failed to send the PR comment — ${msg}`,
     recordedLocal: (p: string) => `Recorded in ${p}`,
-    localCommentFailed: (msg: string) => `Code Review: failed to write the local comment — ${msg}`,
-    ignoreTitle: (t: string) => `Code Review · Ignore: ${t}`,
+    localCommentFailed: (msg: string) => `AI Coding Review: failed to write the local comment — ${msg}`,
+    ignoreTitle: (t: string) => `AI Coding Review · Ignore: ${t}`,
     ignorePrompt: 'Enter a reason for ignoring this finding (persisted to the local review record)',
     ignorePlaceholder: 'e.g. false positive / not this iteration / tracked in issue #123',
     ignoreMinLength: 'At least 4 characters',
@@ -187,25 +187,25 @@ export const en = {
     cancelled: 'Global analysis cancelled',
     noReport: 'No global conclusion yet; run global analysis first',
     fixFileNotInScope: (file: string) =>
-      `Code Review: ${file} is not in the current review scope; skipped.`,
-    generatingDiff: (file: string) => `Code Review: generating a candidate diff for ${file}…`,
+      `AI Coding Review: ${file} is not in the current review scope; skipped.`,
+    generatingDiff: (file: string) => `AI Coding Review: generating a candidate diff for ${file}…`,
     noDiff: '(model returned no diff)',
   },
 
   conclusion: {
     gateFilesUnready: (n: number) => `${n} file(s) not read and analyzed`,
     gateGlobalUnconfirmed: 'Global conclusion not confirmed',
-    gateFailed: (reasons: string) => `Code Review gate not passed: ${reasons}.`,
+    gateFailed: (reasons: string) => `AI Coding Review gate not passed: ${reasons}.`,
     approve: 'Approve',
     requestChanges: 'Request Changes',
     comment: 'Comment',
-    submitTitle: 'Code Review · Submit conclusion',
+    submitTitle: 'AI Coding Review · Submit conclusion',
     submitPlaceholder: 'Select the conclusion of this review',
     confirmPr: (pr: number, label: string) =>
       `This will write the review conclusion back to PR #${pr}: ${label}. Confirm?`,
     submitToGitHub: 'Submit to GitHub',
     prBody: (ready: number, total: number) =>
-      `Reviewed via Code Review — ${ready}/${total} files read line-by-line and confirmed, global conclusion verified.`,
+      `Reviewed via AI Coding Review — ${ready}/${total} files read line-by-line and confirmed, global conclusion verified.`,
     postedToPr: (pr: number, label: string) => `Written back to PR #${pr} (${label})`,
     recordedLocal: (label: string) => `Review conclusion recorded: ${label}`,
   },
@@ -217,10 +217,10 @@ export const en = {
       'Directly pick the source files or directories to review, independent of any diff',
     pickPrLabel: '$(git-pull-request) PR of the current branch',
     pickPrDetail: 'Include the source files touched by the PR (requires gh login)',
-    pickTitle: 'Code Review · Select review scope',
+    pickTitle: 'AI Coding Review · Select review scope',
     pickPlaceholder:
       'Pick the sources to review (local files/folders or the current branch PR)',
-    scanning: 'Code Review: scanning project files…',
+    scanning: 'AI Coding Review: scanning project files…',
     noFiles:
       'No reviewable files in this project (skipped node_modules / .git / dist / out / bin / obj / .vs).',
     branchVsBase: (base: string) => `Current branch vs ${base}`,
@@ -236,7 +236,7 @@ export const en = {
 
   // ── Webview: scope picker panel ──────────────────────────────────────────────
   scopePanel: {
-    title: 'Code Review · Select review scope',
+    title: 'AI Coding Review · Select review scope',
     heading: 'Select review scope',
     rootLabel: 'Project root:',
     note: 'Check the directories or files to include. The scope is locked to this project; you cannot select anything outside it.',
@@ -253,8 +253,8 @@ export const en = {
 
   // ── Webview: workbench panel ─────────────────────────────────────────────────
   workbench: {
-    title: 'Code Review · Workbench',
-    emptyTitle: 'Code Review · Workbench',
+    title: 'AI Coding Review · Workbench',
+    emptyTitle: 'AI Coding Review · Workbench',
     emptyDesc:
       'Pick a scope to review (local files / folders, or the current branch PR) to start a review.',
     emptyButton: 'Select review scope…',
@@ -277,7 +277,7 @@ export const en = {
     modelPrefix: 'Model: ',
     switch: 'Switch',
     languagePrefix: 'Language: ',
-    languageTitle: 'Code Review · Switch language',
+    languageTitle: 'AI Coding Review · Switch language',
     languagePlaceholder: 'Language for the UI and all LLM output',
     langEn: 'English',
     langZh: '中文 (zh-CN)',
@@ -413,7 +413,7 @@ export const en = {
 
   // ── Webview: global report panel ─────────────────────────────────────────────
   globalPanel: {
-    title: 'Code Review · Global conclusion',
+    title: 'AI Coding Review · Global conclusion',
     confirmedRead: 'Confirmed reading the global conclusion',
     noEvidence: '(no evidence chain)',
     lineCoverage: 'line coverage',

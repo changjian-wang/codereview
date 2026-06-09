@@ -1,16 +1,16 @@
-# Code Review Gate
+# AI Coding Review
 
 > Distrust-driven code review: **every line must be looked at**. "Review = distrust" turned into a hard gate — read line-by-line + file-level AI analysis + dispose of every finding + cross-file global analysis. Only when all of that is done are you allowed to submit a conclusion.
 
-[![VS Marketplace Version](https://img.shields.io/visual-studio-marketplace/v/codereview-dev.code-review-gate?label=Marketplace&color=blue)](https://marketplace.visualstudio.com/items?itemName=codereview-dev.code-review-gate)
-[![Installs](https://img.shields.io/visual-studio-marketplace/i/codereview-dev.code-review-gate)](https://marketplace.visualstudio.com/items?itemName=codereview-dev.code-review-gate)
-[![Rating](https://img.shields.io/visual-studio-marketplace/r/codereview-dev.code-review-gate)](https://marketplace.visualstudio.com/items?itemName=codereview-dev.code-review-gate)
+[![VS Marketplace Version](https://img.shields.io/visual-studio-marketplace/v/changjian-wang.ai-coding-review?label=Marketplace&color=blue)](https://marketplace.visualstudio.com/items?itemName=changjian-wang.ai-coding-review)
+[![Installs](https://img.shields.io/visual-studio-marketplace/i/changjian-wang.ai-coding-review)](https://marketplace.visualstudio.com/items?itemName=changjian-wang.ai-coding-review)
+[![Rating](https://img.shields.io/visual-studio-marketplace/r/changjian-wang.ai-coding-review)](https://marketplace.visualstudio.com/items?itemName=changjian-wang.ai-coding-review)
 
 VS Code extension · powered by the GitHub CLI and Copilot models
 
 English | [简体中文](README.zh-CN.md)
 
-<img src="https://raw.githubusercontent.com/changjian-wang/codereview/main/docs/images/workbench-en.png" width="820" alt="Code Review Workbench" />
+<img src="https://raw.githubusercontent.com/changjian-wang/codereview/main/docs/images/workbench-en.png" width="820" alt="AI Coding Review Workbench" />
 
 ## Core ideas
 
@@ -67,7 +67,7 @@ Per-line coverage is shown as a live progress signal (per-file / overall `seen/t
 
 ## Language (bilingual)
 
-Code Review Gate is fully bilingual (English / 简体中文), **English by default**.
+AI Coding Review is fully bilingual (English / 简体中文), **English by default**.
 
 - `codereview.language` drives the **whole experience** — both the extension UI (status bar, prompts, webview panels) and all LLM output (findings, fix proposals, explanations, global conclusions).
   - `en` (default): everything in English

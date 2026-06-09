@@ -1,18 +1,18 @@
 # Releasing
 
-How to cut and publish a new version of **Code Review Gate** to the VS Code Marketplace.
+How to cut and publish a new version of **AI Coding Review** to the VS Code Marketplace.
 
 ## Identity (do not change casually)
 
 | Thing | Value | Where |
 |------|-------|-------|
-| Marketplace item | `codereview-dev.code-review-gate` | derived from `publisher` + `name` in `package.json` |
-| Publisher | `codereview-dev` | https://marketplace.visualstudio.com/manage |
-| Store title | `Code Review Gate` | `displayName` in `package.json` |
+| Marketplace item | `changjian-wang.ai-coding-review` | derived from `publisher` + `name` in `package.json` |
+| Publisher | `changjian-wang` | https://marketplace.visualstudio.com/manage |
+| Store title | `AI Coding Review` | `displayName` in `package.json` |
 | Repo | `changjian-wang/codereview` (public) | GitHub |
 
-> The bare id `codereview` is already taken on the Marketplace — that is why the
-> extension id (`name`) is `code-review-gate`. Changing `name` or `publisher`
+> The bare id `codereview` is taken on the Marketplace, so the extension id
+> (`name`) is `ai-coding-review`. Changing `name` or `publisher`
 > breaks the README badge/link `itemName` and the install id; avoid it.
 
 ## One-time setup (already done, here for reference)
@@ -21,8 +21,8 @@ How to cut and publish a new version of **Code Review Gate** to the VS Code Mark
    - Org `changjian-wang` at https://dev.azure.com
    - Scope: **Marketplace → Manage**
    - PAT **expires 2026-07-07** — regenerate and re-login when it lapses.
-2. **Publisher** `codereview-dev` created at https://marketplace.visualstudio.com/manage
-3. `npx --yes @vscode/vsce login codereview-dev` (paste the PAT into the terminal — never share it).
+2. **Publisher** `changjian-wang` created at https://marketplace.visualstudio.com/manage
+3. `npx --yes @vscode/vsce login changjian-wang` (paste the PAT into the terminal — never share it).
 
 ## Publish a new version
 

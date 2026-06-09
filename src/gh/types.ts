@@ -2,7 +2,7 @@ import type { ReviewFile } from '../scope/types';
 
 export type { ReviewFile as ChangedFile };
 
-/** Minimal pull-request shape Code Review needs from the GitHub CLI. */
+/** Minimal pull-request shape AI Coding Review needs from the GitHub CLI. */
 export interface PullRequest {
   number: number;
   title: string;
