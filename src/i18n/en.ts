@@ -165,8 +165,7 @@ export const en = {
     postedFallbackComment: (pr: number) =>
       `Line comment unavailable; posted as a normal comment on PR #${pr}`,
     postCommentFailed: (msg: string) => `AI Coding Review: failed to send the PR comment — ${msg}`,
-    recordedLocal: (p: string) => `Recorded in ${p}`,
-    localCommentFailed: (msg: string) => `AI Coding Review: failed to write the local comment — ${msg}`,
+    recordedInlineNote: 'Recorded as an inline note (shown next to the code)',
     ignoreTitle: (t: string) => `AI Coding Review · Ignore: ${t}`,
     ignorePrompt: 'Enter a reason for ignoring this finding (persisted to the local review record)',
     ignorePlaceholder: 'e.g. false positive / not this iteration / tracked in issue #123',

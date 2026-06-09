@@ -1,6 +1,4 @@
 import * as vscode from 'vscode';
-import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
 import { ReviewSession } from './review/reviewSession';
 import { WorkspaceStateReviewStore, type Annotation } from './review/reviewStore';
 import { pickModel } from './ai/modelPicker';
@@ -1470,6 +1468,9 @@ async function disposeFinding(rel: string, findingId: string, kind: FindingDispo
     // intuitive meaning of "undo Copilot fix" from the document panel.
     if (kind === 'fixed') {
       await revertAppliedFix(rel, findingId);
+    } else if (kind === 'commented' && current.ref && !/^pr-\d+$/.test(reviewSet.scopeId)) {
+      // Local comment was stored as an inline note; remove it on toggle-off.
+      session.removeAnnotation(rel, current.ref);
     }
     session.setFindingDisposition(rel, findingId, null);
     transientInfo(m().finding.dispositionReverted(rel));
@@ -1528,18 +1529,13 @@ async function disposeFinding(rel: string, findingId: string, kind: FindingDispo
         }
       }
     } else {
-      try {
-        const filePath = await appendLocalFindingNote(cwd, reviewSet.scopeId, rel, finding, body);
-        session.setFindingDisposition(rel, findingId, {
-          kind: 'commented',
-          ref: filePath,
-          at: Date.now(),
-        });
-        transientInfo(m().finding.recordedLocal(path.relative(cwd, filePath)));
-      } catch (err) {
-        void vscode.window.showErrorMessage(m().finding.localCommentFailed((err as Error).message));
-        return;
-      }
+      const annotationId = recordLocalCommentNote(rel, finding);
+      session.setFindingDisposition(rel, findingId, {
+        kind: 'commented',
+        ref: annotationId,
+        at: Date.now(),
+      });
+      transientInfo(m().finding.recordedInlineNote);
     }
   } else if (kind === 'ignored') {
     const reason = await vscode.window.showInputBox({
@@ -1613,21 +1609,28 @@ function composeCommentBody(finding: { title: string; detail: string; suggestion
   return parts.join('\n');
 }
 
-async function appendLocalFindingNote(
-  cwd: string,
-  scopeId: string,
+/**
+ * Records a finding's review comment as an inline note anchored to the finding's
+ * line, so a local (non-PR) comment shows up next to the code — the same place
+ * fixes land — instead of in a separate file. Returns the new annotation id,
+ * stored as the disposition ref so toggling the comment off can remove it.
+ */
+function recordLocalCommentNote(
   rel: string,
-  finding: { line: number; title: string; detail: string; suggestion?: string },
-  body: string,
-): Promise<string> {
-  const dir = path.join(cwd, '.codereview');
-  await fs.mkdir(dir, { recursive: true });
-  const safeScope = scopeId.replace(/[^\w.-]+/g, '_');
-  const target = path.join(dir, `findings-${safeScope}.md`);
-  const stamp = new Date().toISOString();
-  const block = `\n---\n\n## ${rel}:${finding.line}\n\n${body}\n\n<sub>${stamp}</sub>\n`;
-  await fs.appendFile(target, block, 'utf8');
-  return target;
+  finding: { line: number; endLine?: number; anchor?: string; title: string; detail: string; suggestion?: string },
+): string {
+  const annotation: Annotation = {
+    id: newAnnotationId(),
+    kind: 'note',
+    startLine: finding.line,
+    endLine: finding.endLine ?? finding.line,
+    sourceText: finding.anchor ?? '',
+    content: composeCommentBody(finding),
+    createdAt: Date.now(),
+  };
+  session.addAnnotation(rel, annotation);
+  refreshDocPanel(rel);
+  return annotation.id;
 }
 
 async function runGlobalAnalysis(): Promise<void> {
@@ -1910,28 +1913,20 @@ async function disposeGlobalFix(
         }
       }
     } else {
-      try {
-        const findingForNote: Finding = {
-          id: spotId,
-          line: spot.line,
-          endLine: spot.endLine,
-          anchor: spot.anchor,
-          severity: spot.severity,
-          title: spot.title,
-          detail: spot.detail,
-          suggestion: spot.suggestion,
-        };
-        const filePath = await appendLocalFindingNote(cwd, reviewSet.scopeId, file, findingForNote, body);
-        session.setGlobalFixDisposition(spotId, file, spot.line, spot.anchor, {
-          kind: 'commented',
-          ref: filePath,
-          at: Date.now(),
-        });
-        transientInfo(m().finding.recordedLocal(path.relative(cwd, filePath)));
-      } catch (err) {
-        void vscode.window.showErrorMessage(m().finding.localCommentFailed((err as Error).message));
-        return;
-      }
+      const annotationId = recordLocalCommentNote(file, {
+        line: spot.line,
+        endLine: spot.endLine,
+        anchor: spot.anchor,
+        title: spot.title,
+        detail: spot.detail,
+        suggestion: spot.suggestion,
+      });
+      session.setGlobalFixDisposition(spotId, file, spot.line, spot.anchor, {
+        kind: 'commented',
+        ref: annotationId,
+        at: Date.now(),
+      });
+      transientInfo(m().finding.recordedInlineNote);
     }
   } else {
     const reason = await vscode.window.showInputBox({
@@ -1972,6 +1967,13 @@ async function revertGlobalFix(spotId: string, file: string, _line: number): Pro
   if (current?.kind === 'fixed') {
     await revertAppliedFix(file, spotId);
     deleteAppliedFix(fixKey(file, spotId));
+  } else if (
+    current?.kind === 'commented' &&
+    current.ref &&
+    !/^pr-\d+$/.test(session.reviewSet?.scopeId ?? '')
+  ) {
+    // Local comment was stored as an inline note; remove it on revert.
+    session.removeAnnotation(file, current.ref);
   }
   if (spot) {
     session.setGlobalFixDisposition(spotId, file, spot.line, anchor, null);
