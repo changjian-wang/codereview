@@ -947,12 +947,23 @@ function locateEditOffsets(haystack: string, needle: string): { start: number; e
   if (tolerant.length > 0) {
     return tolerant;
   }
-  // Last resort: models frequently drop a trailing comma/semicolon on a JSON/JS
-  // boundary line (file has "}," but the snippet has "}"), which breaks the
-  // exact line compare and yields 0 matches. Ignore a single trailing , or ;
-  // when comparing. Replacement still rewrites the file's real byte range, so
-  // the original punctuation is preserved unless newText changes it.
-  return locateLinesBy(haystack, needle, trimNoPunct);
+  // Models frequently drop a trailing comma/semicolon on a JSON/JS boundary line
+  // (file has "}," but the snippet has "}"), which breaks the exact line compare.
+  const noPunct = locateLinesBy(haystack, needle, trimNoPunct);
+  if (noPunct.length > 0) {
+    return noPunct;
+  }
+  // Collapse internal whitespace runs — handles operator/comment/tab-vs-space
+  // spacing differences inside a line (e.g. "a == b" vs "a  ==  b").
+  const collapsed = locateLinesBy(haystack, needle, trimCollapse);
+  if (collapsed.length > 0) {
+    return collapsed;
+  }
+  // Last resort: ignore ALL whitespace and interior blank lines, so a multi-line
+  // block that differs only by space-vs-nospace adjacency ("//x" vs "// x",
+  // "( a )" vs "(a)") or a reflowed blank line still matches. The replacement
+  // still rewrites the file's real byte span, so nothing is corrupted.
+  return locateFlexibleBlock(haystack, needle);
 }
 
 /** Leading run of spaces/tabs on a line (its indentation). */
@@ -964,6 +975,10 @@ const trimEndOnly = (l: string) => l.replace(/\s+$/, '');
 const trimBothEnds = (l: string) => l.trim();
 /** Trim both ends, then drop a single trailing comma/semicolon (JSON/JS boundary drift). */
 const trimNoPunct = (l: string) => l.trim().replace(/[,;]$/, '');
+/** Collapse internal whitespace runs to one space (+ drop trailing , ;). */
+const trimCollapse = (l: string) => l.trim().replace(/\s+/g, ' ').replace(/[,;]$/, '');
+/** Remove ALL whitespace (+ drop trailing , ;) — the most lenient line compare. */
+const stripAllWs = (l: string) => l.replace(/\s+/g, '').replace(/[,;]$/, '');
 
 /**
  * Line-based matcher: returns char-offset ranges into the ORIGINAL `haystack`
@@ -1010,19 +1025,64 @@ function locateLinesBy(
 }
 
 /**
+ * Most-lenient block matcher: compares only NON-BLANK lines with ALL whitespace
+ * removed, so a snippet that differs from the file by space-vs-nospace adjacency,
+ * operator/comment spacing, or an added/dropped interior blank line still
+ * matches. The returned span covers the contiguous real bytes from the first to
+ * the last matched line (interleaved blank lines included), so the caller can
+ * replace the exact original block. Used only as the final fallback.
+ */
+function locateFlexibleBlock(
+  haystack: string,
+  needle: string,
+): { start: number; end: number }[] {
+  const hlines: { start: number; end: number; norm: string }[] = [];
+  let pos = 0;
+  for (const raw of haystack.split('\n')) {
+    hlines.push({ start: pos, end: pos + raw.length, norm: stripAllWs(raw) });
+    pos += raw.length + 1;
+  }
+  // Indices of non-blank haystack lines (after stripping all whitespace).
+  const hIdx: number[] = [];
+  for (let i = 0; i < hlines.length; i++) {
+    if (hlines[i].norm !== '') {
+      hIdx.push(i);
+    }
+  }
+  const nNorm = needle.split(/\r?\n/).map(stripAllWs).filter((l) => l !== '');
+  if (nNorm.length === 0) {
+    return [];
+  }
+  const out: { start: number; end: number }[] = [];
+  for (let a = 0; a + nNorm.length <= hIdx.length; a++) {
+    let ok = true;
+    for (let b = 0; b < nNorm.length; b++) {
+      if (hlines[hIdx[a + b]].norm !== nNorm[b]) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) {
+      out.push({ start: hlines[hIdx[a]].start, end: hlines[hIdx[a + nNorm.length - 1]].end });
+    }
+  }
+  return out;
+}
+
+/**
  * Resolves one edit against the live file for application: the exact byte range
- * to replace plus the replacement text, or `null` when the edit cannot be
- * placed uniquely (zero or multiple matches — never guess).
- *
- * When the match is found only via the indentation-tolerant fallback, the
- * replacement is re-indented to the file's actual indent so applying it does
- * NOT strip indentation; `newText`'s internal relative indentation is kept.
+ * to replace plus the replacement text, or `null` when the edit cannot be placed
+ * uniquely (zero or multiple matches — never guess). Walks the same tolerance
+ * ladder as {@link locateEditOffsets}, least-aggressive first, refusing on
+ * ambiguity at every rung. Beyond the strict rung the replacement is re-indented
+ * to the file's actual indent so applying never strips indentation.
  */
 function resolveEditAt(
   haystack: string,
   oldText: string,
   newText: string,
 ): { start: number; end: number; replacement: string } | null {
+  // L1 strict: replacement verbatim (zero regression when the snippet matches).
   const strict = locateLinesBy(haystack, oldText, trimEndOnly);
   if (strict.length === 1) {
     return { start: strict[0].start, end: strict[0].end, replacement: newText };
@@ -1030,6 +1090,7 @@ function resolveEditAt(
   if (strict.length > 1) {
     return null;
   }
+  // L2 indentation-tolerant: reindent the replacement to the file's indent.
   const tolerant = locateLinesBy(haystack, oldText, trimBothEnds);
   if (tolerant.length === 1) {
     const hit = tolerant[0];
@@ -1038,22 +1099,28 @@ function resolveEditAt(
   if (tolerant.length > 1) {
     return null;
   }
-  // Last resort: ignore a trailing comma/semicolon difference on boundary lines
-  // (model dropped the file's "}," → "}"). Re-indent as usual, then preserve the
-  // file's own trailing punctuation so applying never strips a comma and breaks
-  // the JSON/JS — append it only when newText's last line doesn't already end
-  // with the same punctuation.
-  const noPunct = locateLinesBy(haystack, oldText, trimNoPunct);
-  if (noPunct.length !== 1) {
-    return null;
+  // L3 trailing-punct, L4 collapsed-whitespace, L5 flexible block: each reindents
+  // and preserves the file's own trailing , ; when newText dropped it. Try the
+  // least-aggressive first; refuse on ambiguity at every rung (never guess).
+  for (const hits of [
+    locateLinesBy(haystack, oldText, trimNoPunct),
+    locateLinesBy(haystack, oldText, trimCollapse),
+    locateFlexibleBlock(haystack, oldText),
+  ]) {
+    if (hits.length > 1) {
+      return null;
+    }
+    if (hits.length === 1) {
+      const h = hits[0];
+      let replacement = reindentToFile(haystack, h, newText);
+      const filePunct = (haystack.slice(h.start, h.end).match(/[,;]\s*$/) || [''])[0].trim();
+      if (filePunct && !/[,;]\s*$/.test(replacement)) {
+        replacement += filePunct;
+      }
+      return { start: h.start, end: h.end, replacement };
+    }
   }
-  const h = noPunct[0];
-  let replacement = reindentToFile(haystack, h, newText);
-  const filePunct = (haystack.slice(h.start, h.end).match(/[,;]\s*$/) || [''])[0].trim();
-  if (filePunct && !/[,;]\s*$/.test(replacement)) {
-    replacement += filePunct;
-  }
-  return { start: h.start, end: h.end, replacement };
+  return null;
 }
 
 /**
