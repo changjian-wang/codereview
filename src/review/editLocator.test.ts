@@ -257,6 +257,82 @@ describe('reindentToFile', () => {
     const out = reindentToFile(file, { start: 0, end: 5 }, 'a\n\nb');
     expect(out).toBe('    a\n\n    b');
   });
+
+  it('leaves a block already at the file indent unchanged (verbatim-string safe)', () => {
+    // A method body containing column-0 lines (a @"..." verbatim string with
+    // markdown at the left margin). Its first line already sits at the file's
+    // indent, so reindent must return it VERBATIM — not add the anchor indent to
+    // every line (which would corrupt the string content). This was the bug
+    // behind 「apply #1, undo, #2 无法应用」.
+    const file = '            return @"\n# Title\n- item\n";\n';
+    const block = '            return @"\n# Title\n- item\n";';
+    expect(reindentToFile(file, { start: 0, end: 20 }, block)).toBe(block);
+  });
+});
+
+describe('apply + undo round-trip (overlapping alternatives)', () => {
+  // Mirrors the SwaggerConfig.cs case: a verbatim-string method body with
+  // column-0 content, two alternative proposals that both touch that region.
+  const FILE = [
+    'public static class SwaggerConfig',        // 1
+    '{',                                        // 2
+    '    public static string GetDoc()',        // 3
+    '    {',                                    // 4
+    '        return @"',                        // 5
+    '# Dawning Gateway',                        // 6  (column 0 — inside the string)
+    '- Authentication',                         // 7  (column 0)
+    '- User Management',                        // 8  (column 0)
+    '";',                                       // 9
+    '    }',                                     // 10
+    '}',                                        // 11
+  ].join('\n');
+
+  // Proposal 1: translate the doc body. Anchored at the verbatim block (5–9),
+  // with the model preserving the file's real indentation.
+  const proposal1 = {
+    startLine: 5,
+    endLine: 9,
+    oldText: '        return @"\n# Dawning Gateway\n- Authentication\n- User Management\n";',
+    newText: '        return @"\n# 曙光网关\n- 身份认证\n- 用户管理\n";',
+  };
+
+  function apply(text: string, e: typeof proposal1): string {
+    const r = resolveEditAt(text, e);
+    expect(r).not.toBeNull();
+    return text.slice(0, r!.start) + r!.replacement + text.slice(r!.end);
+  }
+
+  it('apply then undo restores the file byte-for-byte', () => {
+    const afterApply = apply(FILE, proposal1);
+    // Undo = the reversed edit, carrying the same line anchor (what the panel does).
+    const afterUndo = apply(afterApply, {
+      startLine: proposal1.startLine,
+      endLine: proposal1.endLine,
+      oldText: proposal1.newText,
+      newText: proposal1.oldText,
+    });
+    expect(afterUndo).toBe(FILE);
+  });
+
+  it('a second overlapping proposal still applies after apply+undo of the first', () => {
+    const afterApply = apply(FILE, proposal1);
+    const afterUndo = apply(afterApply, {
+      startLine: proposal1.startLine,
+      endLine: proposal1.endLine,
+      oldText: proposal1.newText,
+      newText: proposal1.oldText,
+    });
+    // Proposal 2: remove the whole verbatim block (an alternative fix). Its
+    // oldText is verbatim from the ORIGINAL file; it must still resolve once the
+    // first proposal has been undone.
+    const proposal2 = {
+      startLine: 5,
+      endLine: 9,
+      oldText: '        return @"\n# Dawning Gateway\n- Authentication\n- User Management\n";',
+      newText: '        return string.Empty;',
+    };
+    expect(resolveEditAt(afterUndo, proposal2)).not.toBeNull();
+  });
 });
 
 describe('hashContent — drift detection', () => {

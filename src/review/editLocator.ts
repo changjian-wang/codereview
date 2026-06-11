@@ -241,9 +241,20 @@ export function editStatus(text: string, edit: FixEdit): 'ok' | 'gone' | 'ambigu
 }
 
 /**
- * Re-indents `newText` so its outermost indentation matches the file line at
- * `hit.start`, preserving `newText`'s internal relative indentation. Used on the
- * line-anchored path, where the model may have dropped/changed leading indent.
+ * Re-indents `newText` so it sits at the file's indentation at `hit.start`,
+ * used on the line-anchored path when the model dropped the leading indent.
+ *
+ * It ONLY corrects a uniform under-indentation: if `newText`'s first non-blank
+ * line is shallower than the file's anchor indent (and a prefix of it), the
+ * missing prefix is prepended to every non-blank line, preserving the block's
+ * internal relative indentation. If `newText` already sits at (or below) the
+ * anchor indent, it is returned VERBATIM.
+ *
+ * It deliberately does NOT strip a common minimum indent: doing so corrupts
+ * blocks that contain column-0 lines — e.g. a C# `@"..."` verbatim string or a
+ * heredoc whose content sits at the left margin — by shifting that significant
+ * whitespace. That corruption broke the apply→undo round-trip (undoing a fix no
+ * longer restored the file, so an overlapping alternative could not re-apply).
  */
 export function reindentToFile(
   haystack: string,
@@ -256,15 +267,22 @@ export function reindentToFile(
   }
   const origIndent = leadingWhitespace(haystack.slice(hit.start, nlPos));
   const lines = newText.split('\n');
-  let minIndent = Infinity;
+  let firstIndent: string | undefined;
   for (const l of lines) {
-    if (l.trim() === '') {
-      continue;
+    if (l.trim() !== '') {
+      firstIndent = leadingWhitespace(l);
+      break;
     }
-    minIndent = Math.min(minIndent, leadingWhitespace(l).length);
   }
-  if (!isFinite(minIndent)) {
-    minIndent = 0;
+  // Nothing to anchor on, already at/over the file indent, or the indents use a
+  // different whitespace shape (tabs vs spaces): leave verbatim — never corrupt.
+  if (
+    firstIndent === undefined ||
+    !origIndent.startsWith(firstIndent) ||
+    origIndent.length <= firstIndent.length
+  ) {
+    return newText;
   }
-  return lines.map((l) => (l.trim() === '' ? '' : origIndent + l.slice(minIndent))).join('\n');
+  const pad = origIndent.slice(firstIndent.length);
+  return lines.map((l) => (l.trim() === '' ? l : pad + l)).join('\n');
 }
