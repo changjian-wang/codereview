@@ -557,6 +557,9 @@ export class WorkbenchPanel {
   .tfolder .caret { display:inline-block; width:11px; text-align:center;
     transition:transform .15s ease; transform:rotate(0deg); color:var(--dim); flex-shrink:0; }
   .tfolder.expanded .caret { transform:rotate(90deg); }
+  /* Leaf (file) rows reserve the same caret-width slot so their seen-dot and name
+     line up in a column with folder rows / a parent folder's children. */
+  .tnode .caret-spacer { display:inline-block; width:11px; flex-shrink:0; }
   .tfolder .ficon { flex-shrink:0; opacity:.85; }
   .tfolder .tname { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:500; }
   .tfolder .tcount { font-family:var(--vscode-editor-font-family); font-size:.68rem;
@@ -796,6 +799,7 @@ export class WorkbenchPanel {
       : (row.analyzed && row.findings === 0 ? '<span class="ok-flag" title="' + esc(T.noFindings) + '">\u2713</span>' : '');
     const cov = row.total > 0 ? (row.seen + '/' + row.total) : '\u2014';
     return '<div class="trow tnode' + (row.active ? ' active' : '') + (row.ready ? ' ready' : '') + (row.fullySeen ? ' seen' : '') + '" data-kind="file" data-path="' + esc(row.path) + '" style="top:' + top + 'px; padding-left:' + indent + 'px">'
+      + '<span class="caret-spacer"></span>'
       + '<span class="seen-dot ' + dotClass + '" title="' + esc(dotTitle) + '"></span>'
       + '<span class="tname" title="' + esc(row.path) + '">' + esc(row.name) + '</span>'
       + chg + fix
