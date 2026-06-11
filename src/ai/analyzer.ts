@@ -108,16 +108,19 @@ async function ask(
   ];
   let out = '';
   try {
-    // Temperature 0: this is a review tool, so its value is reproducibility —
-    // the same input should yield the same findings, not a fresh random subset
-    // each run (which forced re-analyzing until results converged). Determinism
-    // over diversity for every op (analyze/global/fix/diff). Not all providers
-    // honor this identically, but it sharply cuts run-to-run variance.
-    const response = await model.sendRequest(
-      messages,
-      { modelOptions: { temperature: 0 } },
-      token,
-    );
+    // Temperature 0 ONLY for the review ops (analyze/global): a review tool's
+    // value is reproducibility — the same input should yield the same findings,
+    // not a fresh random subset each run (which forced re-analyzing until results
+    // converged). Fix generation (fix/diff) deliberately keeps the provider
+    // default: a borderline finding can return an empty proposal set, and
+    // retrying with fresh sampling is the self-heal — pinning temp 0 there made
+    // 「重新生成」 deterministically reproduce the same empty result (a dead end).
+    // translate/explain keep the default too (not review findings).
+    const reproducible = options.op === 'analyze' || options.op === 'global';
+    const requestOptions: vscode.LanguageModelChatRequestOptions = reproducible
+      ? { modelOptions: { temperature: 0 } }
+      : {};
+    const response = await model.sendRequest(messages, requestOptions, token);
     for await (const chunk of response.text) {
       out += chunk;
     }
