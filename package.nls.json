@@ -12,6 +12,8 @@
   "cmd.submitConclusion": "AI Coding Review: Submit Conclusion",
   "cmd.locateFinding": "AI Coding Review: Locate Finding",
   "cmd.jumpToNextUnseen": "AI Coding Review: Jump to Next Unseen Line",
+  "view.launcher.name": "Review",
+  "view.launcher.welcome": "Review your code, line by line — nothing is approved until every line is seen and every finding is handled.\n[Start / Open Review](command:codereview.openOrStart)\n[Open in New Window](command:codereview.openInNewWindow)\nPick the analysis model or language:\n[Select Model](command:codereview.pickModel)\n[Switch Language](command:codereview.pickLanguage)",
   "config.language.auto": "Follow the VS Code display language",
   "config.language.zh": "Always use Simplified Chinese",
   "config.language.en": "Always use English",
