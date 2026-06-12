@@ -100,11 +100,15 @@ export function matchesBy(
     return [];
   }
   const lines = lineTable(text);
+  // Normalise each file line once, not once per overlapping window: `norm` is
+  // pure, so hoisting it out of the inner loop is behaviour-preserving and drops
+  // the work from O(lines × needle) normalisations to O(lines).
+  const normed = lines.map((l) => norm(l.raw));
   const out: LocatedMatch[] = [];
   for (let i = 0; i + nl.length <= lines.length; i++) {
     let ok = true;
     for (let j = 0; j < nl.length; j++) {
-      if (norm(lines[i + j].raw) !== nl[j]) {
+      if (normed[i + j] !== nl[j]) {
         ok = false;
         break;
       }
