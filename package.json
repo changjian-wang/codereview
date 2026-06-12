@@ -2,7 +2,7 @@
   "name": "ai-coding-review",
   "displayName": "AI Coding Review",
   "description": "Distrust-driven code review: per-line coverage gate plus file-level and cross-file AI analysis, powered by the GitHub CLI and VS Code's Copilot models.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "changjian-wang",
   "private": true,
   "license": "MIT",
@@ -86,6 +86,30 @@
         "command": "codereview.jumpToNextUnseen",
         "title": "%cmd.jumpToNextUnseen%",
         "icon": "$(arrow-down)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "codereview",
+          "title": "AI Coding Review",
+          "icon": "media/activity-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "codereview": [
+        {
+          "id": "codereview.launcher",
+          "name": "%view.launcher.name%",
+          "type": "tree"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "codereview.launcher",
+        "contents": "%view.launcher.welcome%"
       }
     ],
     "configuration": {

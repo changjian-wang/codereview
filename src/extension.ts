@@ -200,6 +200,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('codereview.locateFinding', locateInFile),
     vscode.commands.registerCommand('codereview.jumpToNextUnseen', jumpToNextUnseenCurrent),
     createStatusBarEntry(),
+    registerLauncherView(),
   );
 
   // Keep the workbench webview in sync with session progress.
@@ -253,6 +254,22 @@ export function activate(context: vscode.ExtensionContext): void {
   // Activation setup is done; swap the status bar spinner for the real icon so
   // users only click once it can actually open the workbench.
   markStatusBarReady();
+}
+
+/**
+ * Registers the Activity Bar launcher view. It is an intentionally empty tree:
+ * its only job is to host the `viewsWelcome` buttons (contributed in
+ * package.json) so the Activity Bar icon opens a prominent, always-findable
+ * entry point — addressing reports that the bottom-right status-bar entry is
+ * easy to miss. The buttons reuse existing commands (open/start review, open in
+ * a new window, pick model/language), so there is no behaviour to duplicate.
+ */
+function registerLauncherView(): vscode.Disposable {
+  const provider: vscode.TreeDataProvider<never> = {
+    getChildren: () => [],
+    getTreeItem: (element) => element,
+  };
+  return vscode.window.registerTreeDataProvider('codereview.launcher', provider);
 }
 
 /** Status bar button; starts as a spinner during activation, then the real icon. */
